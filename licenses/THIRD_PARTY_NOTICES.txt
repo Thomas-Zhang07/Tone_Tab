@@ -1,0 +1,38 @@
+老干部活动中心 —— 许可证与第三方组件声明
+====================================
+
+本程序（老干部活动中心，制作者：痛风老大爷；程序文件名 LianqinHost）按 GNU Affero 通用公共许可证第 3 版（AGPLv3）发布，
+全文见 AGPL-3.0.txt。本程序不提供任何担保。
+
+完整源代码就在发布包里的「源码.zip」中；用 build.bat 即可在 Windows 上重新编译。
+如果你修改后再分发给别人，也要按 AGPLv3 一起提供你修改后的源代码。
+
+例外：Source/song/GpImporter.cpp（Guitar Pro 谱子导入）参考 alphaTab
+（https://github.com/CoderLine/alphaTab）编写，按 Mozilla Public License 2.0 发布，
+全文见 MPL-2.0.txt。
+
+本程序使用的第三方组件
+----------------------
+组件                          用途                      许可证（本程序选用的那一种）     文件
+JUCE 9.0.4                    界面、音频驱动、插件宿主    AGPLv3                          JUCE-LICENSE.md, AGPL-3.0.txt
+Steinberg ASIO SDK（JUCE 内） ASIO 低延迟声卡驱动         GPLv3                           ASIO-SDK-LICENSE.txt, GPL-3.0.txt
+Steinberg VST3 SDK（JUCE 内） 加载 VST3 插件             MIT                             VST3-SDK-LICENSE.txt
+NeuralAmpModelerCore          NAM 箱头模型推理           MIT                             NeuralAmpModelerCore-LICENSE.txt
+Eigen                         NAM 的矩阵运算             MPL-2.0                         Eigen-COPYING.MPL2.txt, MPL-2.0.txt
+nlohmann/json                 读取 .nam 模型文件         MIT                             nlohmann-json-LICENSE.txt
+alphaTab（参考实现）          Guitar Pro 格式解析        MPL-2.0                         MPL-2.0.txt
+
+附带的音色文件
+--------------
+「音色库/NAM」里的模型来自 pelennor2170/NAM_models（https://github.com/pelennor2170/NAM_models），
+按 GPLv3 发布，见 音色库/NAM/COPYING-GPLv3.txt。模型作者署名保留在文件名里。
+
+商标
+----
+ASIO 和 VST 是 Steinberg Media Technologies GmbH 的商标。Guitar Pro 是 Arobas Music 的商标。
+内置效果器“型号”和预设名字里提到的 Fender、Twin、Deluxe、Marshall、Plexi、JCM800、JCM2000、JVM、
+Vox、AC30、AC15、Mesa/Boogie、Mark、Rectifier、5150、EVH、Peavey、Ibanez、Tube Screamer、TS808、TS9、
+Maxon、OD808、Klon、Centaur、Boss、SD-1、DS-1、ProCo、RAT、Blues Breaker 等都是各自所有者的商标，
+只用来说明数字模拟参考的是哪一类经典音色。内置模拟是按公开的电路特点自己写的算法，不是这些产品的采样，
+也不代表这些厂商认可或与本程序有任何关联。“真实采样”预设用的 NAM 模型是网友的采样作品（见下）。
+本程序与这些公司没有关联。
