@@ -54,7 +54,8 @@ $mySettings = Join-Path $env:APPDATA 'Tone_Tab\settings.xml'
 if (Test-Path $mySettings) {
     [xml]$x = Get-Content $mySettings -Raw -Encoding UTF8
     $drop = @('audioDevice', 'guitarChannel', 'knownPlugins', 'tabRecent', 'tabLastFile', 'tabLastFolder',
-              'tabWatchFolder', 'judgeCalibrationMs', 'defaultPresetsVersion', 'bundledPresetsStamp')
+              'tabWatchFolder', 'judgeCalibrationMs', 'defaultPresetsVersion', 'bundledPresetsStamp',
+              'library.root', 'recording.root')
     foreach ($v in @($x.PROPERTIES.VALUE)) { if ($drop -contains $v.GetAttribute('name')) { [void]$x.PROPERTIES.RemoveChild($v) } }
     $setDir = New-Item -ItemType Directory (Join-Path $stage 'defaults')
     $x.Save((Join-Path $setDir.FullName 'settings.xml'))

@@ -59,6 +59,8 @@ MainComponent::MainComponent()
 
     if (const auto root = settings->getValue ("library.root"); root.isNotEmpty())
         AppPaths::setLibraryRoot (juce::File (root));
+    if (const auto rec = settings->getValue ("recording.root"); rec.isNotEmpty())
+        AppPaths::setRecordingsRoot (juce::File (rec));
 
     // One-time, non-destructive import from the old application.
     if (! settings->getBoolValue ("legacyImportDone", false))
@@ -220,8 +222,13 @@ MainComponent::MainComponent()
     engine.getJudge().startAnalysis();
     addChildComponent (*practicePanel);
 
-    toneViewButton.setButtonText (TR ("Tone · Drums", "音色 · 鼓机"));
+    recordingPanel = std::make_unique<RecordingPanel> (engine, *settings);
+    addChildComponent (*recordingPanel);
+
+    toneViewButton.setButtonText (TR ("Tone", "音色"));
     practiceViewButton.setButtonText (TR ("Practice", "练习谱面"));
+    drumsViewButton.setButtonText (TR ("Drums", "鼓机"));
+    recordViewButton.setButtonText (TR ("Record", "录音"));
     statsViewButton.setButtonText (TR ("Stats", "练习记录"));
     statsView = std::make_unique<StatsView> (practiceLog);
     statsView->onOpenSong = [this] (const juce::File& f)
@@ -231,7 +238,7 @@ MainComponent::MainComponent()
             practicePanel->loadFile (f);
     };
     addChildComponent (*statsView);
-    for (auto* b : { &toneViewButton, &practiceViewButton, &statsViewButton })
+    for (auto* b : { &toneViewButton, &practiceViewButton, &drumsViewButton, &recordViewButton, &statsViewButton })
     {
         b->setClickingTogglesState (true);
         b->setRadioGroupId (1001);
@@ -240,10 +247,14 @@ MainComponent::MainComponent()
     }
     toneViewButton.setConnectedEdges (juce::Button::ConnectedOnRight);
     practiceViewButton.setConnectedEdges (juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
+    drumsViewButton.setConnectedEdges (juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
+    recordViewButton.setConnectedEdges (juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
     statsViewButton.setConnectedEdges (juce::Button::ConnectedOnLeft);
     statsViewButton.onClick = [this] { if (statsViewButton.getToggleState()) setView (View::stats); };
     toneViewButton.onClick = [this] { if (toneViewButton.getToggleState()) setView (View::tone); };
     practiceViewButton.onClick = [this] { if (practiceViewButton.getToggleState()) setView (View::practice); };
+    drumsViewButton.onClick = [this] { if (drumsViewButton.getToggleState()) setView (View::drums); };
+    recordViewButton.onClick = [this] { if (recordViewButton.getToggleState()) setView (View::record); };
 
     // 恢复上次的链路；第一次运行加载默认音色
     if (auto xml = settings->getXmlValue ("currentChain"))
@@ -262,7 +273,10 @@ MainComponent::MainComponent()
 
     {
         const auto v = settings->getValue ("view");
-        setView (v == "practice" ? View::practice : v == "stats" ? View::stats : View::tone);
+        setView (v == "practice" ? View::practice
+                 : v == "drums" ? View::drums
+                 : v == "record" ? View::record
+                 : v == "stats" ? View::stats : View::tone);
     }
 
     tunerBuffer.resize (4096);
@@ -295,6 +309,7 @@ MainComponent::~MainComponent()
     chain.clear();
     engine.releaseAllChains();
 
+    recordingPanel = nullptr;
     practicePanel = nullptr;
     statsView = nullptr;
     drumPanel = nullptr;
@@ -311,7 +326,10 @@ void MainComponent::saveSettings()
     s->setValue ("inputGainDb", inputGainSlider.getValue());
     s->setValue ("outputGainDb", outputGainSlider.getValue());
     s->setValue ("monitoring", monitorToggle.getToggleState());
-    s->setValue ("view", view == View::practice ? "practice" : view == View::stats ? "stats" : "tone");
+    s->setValue ("view", view == View::practice ? "practice"
+                          : view == View::drums ? "drums"
+                          : view == View::record ? "record"
+                          : view == View::stats ? "stats" : "tone");
     practiceLog.saveIfNeeded();
     if (auto xml = chain.toXml())
         s->setValue ("currentChain", xml.get());
@@ -412,7 +430,7 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
     }
     if (view == View::practice)
         return practicePanel->keyPressed (key);
-    if (view == View::stats)
+    if (view == View::record || view == View::stats)
         return false;
 
     if (key == juce::KeyPress::spaceKey)
@@ -431,11 +449,21 @@ void MainComponent::setView (View v)
     const bool tone = v == View::tone;
     toneViewButton.setToggleState (tone, juce::dontSendNotification);
     practiceViewButton.setToggleState (v == View::practice, juce::dontSendNotification);
+    drumsViewButton.setToggleState (v == View::drums, juce::dontSendNotification);
+    recordViewButton.setToggleState (v == View::record, juce::dontSendNotification);
     statsViewButton.setToggleState (v == View::stats, juce::dontSendNotification);
-    for (auto* c : std::initializer_list<juce::Component*> { &chainLabel, presetBar.get(), pedalBoard.get(), drumPanel.get() })
+    for (auto* c : std::initializer_list<juce::Component*> { &chainLabel, presetBar.get(), pedalBoard.get() })
         c->setVisible (tone);
+    drumPanel->setVisible (v == View::drums);
     practicePanel->setVisible (v == View::practice);
+    recordingPanel->setVisible (v == View::record);
     statsView->setVisible (v == View::stats);
+
+    const bool showRail = v == View::tone || v == View::practice;
+    for (auto* c : std::initializer_list<juce::Component*> { &channelLabel, &channelBox, &inputGainLabel,
+                                                              &inputGainSlider, &outputGainLabel, &outputGainSlider,
+                                                              &monitorToggle, &hintLabel, &inputMeter, &outputMeter, &tuner })
+        c->setVisible (showRail);
     if (v == View::stats)
         statsView->refresh();
     if (! tone)
@@ -574,10 +602,12 @@ void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (bgColour);
     g.setColour (panelColour);
-    g.fillRoundedRectangle (leftPanel.toFloat(), 10.0f);
+    if (view == View::tone || view == View::practice)
+        g.fillRoundedRectangle (leftPanel.toFloat(), 10.0f);
     if (view == View::tone)
-        for (auto& r : { fxPanel, drumPanelArea })
-            g.fillRoundedRectangle (r.toFloat(), 10.0f);
+        g.fillRoundedRectangle (fxPanel.toFloat(), 10.0f);
+    else if (view == View::drums)
+        g.fillRoundedRectangle (practiceArea.toFloat(), 10.0f);
 }
 
 void MainComponent::resized()
@@ -590,20 +620,24 @@ void MainComponent::resized()
     header.removeFromRight (6);
     languageBox.setBounds (header.removeFromRight (72).reduced (0, 3));
     header.removeFromRight (12);
-    latencyLabel.setBounds (header.removeFromRight (170));
-    titleLabel.setBounds (header.removeFromLeft (160));
-    authorLabel.setBounds (header.removeFromLeft (190));
-    toneViewButton.setBounds (header.removeFromLeft (110).reduced (0, 1));
-    practiceViewButton.setBounds (header.removeFromLeft (96).reduced (0, 1));
-    statsViewButton.setBounds (header.removeFromLeft (96).reduced (0, 1));
+    latencyLabel.setBounds (header.removeFromRight (150));
+    titleLabel.setBounds (header.removeFromLeft (150));
+    authorLabel.setBounds (header.removeFromLeft (150));
+    toneViewButton.setBounds (header.removeFromLeft (84).reduced (0, 1));
+    practiceViewButton.setBounds (header.removeFromLeft (92).reduced (0, 1));
+    drumsViewButton.setBounds (header.removeFromLeft (84).reduced (0, 1));
+    recordViewButton.setBounds (header.removeFromLeft (84).reduced (0, 1));
+    statsViewButton.setBounds (header.removeFromLeft (80).reduced (0, 1));
     header.removeFromLeft (14);
     statusLabel.setBounds (header);
     area.removeFromTop (12);
 
-    // 左栏
-    leftPanel = area.removeFromLeft (310);
-    area.removeFromLeft (14);
+    // Left input rail: tone and practice only.
+    leftPanel = {};
+    if (view == View::tone || view == View::practice)
     {
+        leftPanel = area.removeFromLeft (310);
+        area.removeFromLeft (14);
         auto p = leftPanel.reduced (16);
         auto rowWithLabel = [&p] (juce::Label& l, juce::Component& c)
         {
@@ -630,9 +664,9 @@ void MainComponent::resized()
     // 右侧：练习谱面 / 效果器链 + 鼓机
     practiceArea = area;
     practicePanel->setBounds (practiceArea);
+    recordingPanel->setBounds (practiceArea);
     statsView->setBounds (practiceArea);
-    drumPanelArea = area.removeFromBottom (210);
-    area.removeFromBottom (14);
+    drumPanel->setBounds (practiceArea);
     fxPanel = area;
 
     {
@@ -643,8 +677,6 @@ void MainComponent::resized()
         p.removeFromTop (10);
         pedalBoard->setBounds (p);
     }
-
-    drumPanel->setBounds (drumPanelArea.reduced (16));
 
     if (pedalOverlay != nullptr)
         pedalOverlay->setBounds (getLocalBounds());

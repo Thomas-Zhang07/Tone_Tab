@@ -10,6 +10,7 @@
 #include "ui/DrumPanel.h"
 #include "ui/PedalEditor.h"
 #include "ui/PracticePanel.h"
+#include "ui/RecordingPanel.h"
 #include "ui/StatsView.h"
 
 class MainComponent : public juce::Component,
@@ -28,7 +29,7 @@ public:
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int x, int y) override;
 
-    enum class View { tone, practice, stats };
+    enum class View { tone, practice, drums, record, stats };
     void setView (View v);
     PracticePanel& getPracticePanel()    { return *practicePanel; }
 
@@ -67,7 +68,8 @@ private:
     std::unique_ptr<DrumPanel> drumPanel;
     std::unique_ptr<PedalEditorOverlay> pedalOverlay;
     std::unique_ptr<PracticePanel> practicePanel;
-    juce::TextButton toneViewButton, practiceViewButton, statsViewButton;
+    std::unique_ptr<RecordingPanel> recordingPanel;
+    juce::TextButton toneViewButton, practiceViewButton, drumsViewButton, recordViewButton, statsViewButton;
     PracticeLog practiceLog { PracticeLog::defaultFile() };
     std::unique_ptr<StatsView> statsView;
     View view = View::tone;

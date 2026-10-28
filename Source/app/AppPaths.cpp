@@ -3,6 +3,7 @@
 namespace
 {
     juce::File libraryRootOverride;
+    juce::File recordingsRootOverride;
 
     // Look for a folder next to the module, then walk up a few levels so that a
     // development build (build/Tone_Tab_artefacts/Release/Tone_Tab.exe) still
@@ -64,7 +65,16 @@ namespace AppPaths
     juce::File gervanaDir() { return libraryDir().getChildFile ("gervana"); }
 
     juce::File presetsDir()    { return documentsDir().getChildFile ("presets"); }
-    juce::File recordingsDir() { return documentsDir().getChildFile ("recordings"); }
+
+    void setRecordingsRoot (const juce::File& root) { recordingsRootOverride = root; }
+    void clearRecordingsRoot()                      { recordingsRootOverride = {}; }
+
+    juce::File recordingsDir()
+    {
+        if (recordingsRootOverride.getFullPathName().isNotEmpty())
+            return recordingsRootOverride;
+        return documentsDir().getChildFile ("recordings");
+    }
 
     juce::File tabsDir()
     {

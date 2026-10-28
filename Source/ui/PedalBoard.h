@@ -41,6 +41,7 @@ private:
     void rebuild();
     void closeEditor (EffectSlot* slot);
     void chooseFile (bool nam, int index, bool replaceExisting);
+    void addNamFile (const juce::File& file, int index);
     void duplicate (int index);
     void showError (const juce::String& message);
 

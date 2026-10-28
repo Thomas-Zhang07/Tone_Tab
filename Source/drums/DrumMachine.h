@@ -110,8 +110,21 @@ public:
     float getHumanize() const           { return humanize.load(); }
     void triggerFillNow()               { fillRequested.store (true); }
 
+    // Per-piece mixer (linear gain, 0..2).
+    void setPieceGain (DrumInstrument inst, float gain)
+    {
+        if (juce::isPositiveAndBelow ((int) inst, (int) numDrumInstruments))
+            pieceGain[(size_t) inst].store (juce::jlimit (0.0f, 2.0f, gain));
+    }
+    float getPieceGain (DrumInstrument inst) const
+    {
+        return juce::isPositiveAndBelow ((int) inst, (int) numDrumInstruments)
+                   ? pieceGain[(size_t) inst].load() : 1.0f;
+    }
+
     // UI state.
     int getCurrentBeat() const          { return currentBeat.load(); }
+    int getCurrentStep() const          { return currentStep.load(); }
     bool isInCountIn() const            { return inCountIn.load(); }
     bool isInFill() const               { return inFill.load(); }
 
@@ -129,8 +142,9 @@ private:
     std::atomic<bool> fillRequested { false }, restartRequested { false };
     std::atomic<int> styleIndex { 0 }, fillEvery { 4 };
     std::atomic<float> bpm { 100.0f }, swing { 0.0f }, volumeDb { -6.0f }, humanize { 0.0f };
-    std::atomic<int> currentBeat { -1 };
+    std::atomic<int> currentBeat { -1 }, currentStep { -1 };
     std::atomic<bool> inCountIn { false }, inFill { false };
+    std::array<std::atomic<float>, numDrumInstruments> pieceGain;
 
     double sampleRate = 48000.0;
     std::array<DrumVoice, numDrumInstruments> voices;

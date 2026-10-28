@@ -1393,9 +1393,10 @@ int runOfflineTests (int argc, char* argv[])
         juce::StringArray stray;
         auto cat = [&] (auto& list) { for (auto& p : list) if (PresetBar::categoryOf (T (p[0])) == "user") stray.add (T (p[0])); };
         cat (DefaultPresets::list); cat (DefaultPresets::listV2); cat (DefaultPresets::listV3); cat (DefaultPresets::listGervana);
-        check (stray.isEmpty() && PresetBar::categoryOrder()[0] == "Gervana"
+        check (stray.isEmpty() && PresetBar::categoryOrder()[0] == "fender"
+                   && PresetBar::categoryOf (T ("真实采样 · Fender Twin 清音")) == "fender"
                    && PresetBar::categoryOf (T ("我自己的音色")) == "user",
-               juce::String::fromUTF8 ("预设分类（Gervana 在最前）") + (stray.isEmpty() ? juce::String() : "  " + stray.joinIntoString (", ")));
+               juce::String::fromUTF8 ("预设分类（Fender 在最前）") + (stray.isEmpty() ? juce::String() : "  " + stray.joinIntoString (", ")));
     }
 
     std::printf ("\n== 18. 录音和回放（回放时谱子要对上，判定结果应该一样）\n");

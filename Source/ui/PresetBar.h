@@ -32,6 +32,7 @@ private:
     EffectChain& chain;
     juce::PropertiesFile& settings;
     juce::String currentName;
+    int currentPresetId = 0;
     std::map<juce::String, juce::File> fileByName;
     std::map<int, juce::String> nameById;
 

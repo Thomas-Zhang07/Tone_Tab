@@ -10,6 +10,13 @@ interface, ASCII paths, a rewritten drum engine, and dual-stem recording.
 
 - **Tone chain**: 22 built-in effects + 6 Gervana effects, NAM amp models, cabinet
   IRs, VST3 hosting, presets, tuner.
+- **Tone browser**: searchable list of all 270 NAM models with category filters,
+  plus a Fender shortcut at the top of the add menu; preset dropdown starts with
+  Fender NAM and Captures.
+- **Record view**: dedicated tab with record/stop, take list, dry-through-chain
+  replay, delete, refresh and open-folder controls.
+- **Drums view**: visible style grid, 16-step pattern display, transport,
+  Verse/Chorus/Fill, feel controls and a per-piece mixer.
 - **NAM library**: 270 unique captures (259 A1 + 11 A2 full-rig) and 42 IRs,
   merged from the local NAM and LianqinHost libraries. Category and curated-name
   aliases are kept in `assets/nam/index.json`.
@@ -85,7 +92,8 @@ policy and `assets/nam/README.md` for licensing notes.
 
 - Presets: `Documents\Tone_Tab\presets` (ASCII file names; display names are
   stored inside each XML and are bilingual).
-- Recordings: `Documents\Tone_Tab\recordings\<take>\`.
+- Recordings: configurable in the Record view (**Change Folder…**); default
+  `Documents\Tone_Tab\recordings\<take>\`.
 - Settings: `%APPDATA%\Tone_Tab\settings.xml`.
 - Practice log: `%APPDATA%\Tone_Tab\practice_log.json`.
 

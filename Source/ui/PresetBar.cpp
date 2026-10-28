@@ -1,4 +1,5 @@
 #include "PresetBar.h"
+#include "NamBrowser.h"
 #include "Text.h"
 #include "app/AppPaths.h"
 #include "fx/DefaultPresets.h"
@@ -65,6 +66,30 @@ PresetBar::PresetBar (EffectChain& c, juce::PropertiesFile& s) : chain (c), sett
     presetBox.setTextWhenNothingSelected (TR ("(unsaved tone)", "（未保存的音色）"));
     presetBox.onChange = [this]
     {
+        if (presetBox.getSelectedId() == 9000)
+        {
+            presetBox.setSelectedId (currentPresetId, juce::dontSendNotification);
+            NamBrowser::show (this, [this] (juce::File file)
+            {
+                juce::String error;
+                auto slot = chain.createNam (file, error);
+                if (slot == nullptr)
+                {
+                    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                            TR ("Cannot load model", "没法加载模型"), error);
+                    return;
+                }
+
+                chain.insert (slot);
+                currentName = {};
+                settings.setValue ("currentPreset", currentName);
+                refreshList();
+                presetBox.setText (TR ("(unsaved tone)", "（未保存的音色）"),
+                                   juce::dontSendNotification);
+            });
+            return;
+        }
+
         const auto it = nameById.find (presetBox.getSelectedId());
         const auto name = it != nameById.end() ? it->second : presetBox.getText();
         if (name.isNotEmpty() && name != currentName)
@@ -219,6 +244,7 @@ namespace
         if (key == "Gervana")     return "Gervana";
         if (key == "basic")       return TR ("Basic", "基础");
         if (key == "classic")     return TR ("Classic", "经典");
+        if (key == "fender")      return TR ("Fender NAM", "Fender NAM");
         if (key == "nam")         return TR ("Captures", "真实采样");
         if (key == "pioneer")     return TR ("Pioneer", "先锋");
         if (key == "postrock")    return TR ("Post-rock", "后摇");
@@ -254,8 +280,8 @@ namespace
 
 const juce::StringArray& PresetBar::categoryOrder()
 {
-    static const juce::StringArray order { "Gervana", "basic", "classic", "nam", "pioneer", "postrock",
-                                           "psychedelic", "postpunk", "weird", "bass", "user" };
+    static const juce::StringArray order { "fender", "nam", "basic", "classic", "pioneer", "postrock",
+                                           "psychedelic", "postpunk", "weird", "bass", "Gervana", "user" };
     return order;
 }
 
@@ -272,6 +298,8 @@ juce::String PresetBar::categoryOf (const juce::String& name)
     if (name.contains (sep))
     {
         const auto prefix = name.upToFirstOccurrenceOf (sep, false, false).trim();
+        if (prefix == T ("真实采样") && name.containsIgnoreCase ("Fender"))
+            return "fender";
         if (const auto key = categoryKeyForPrefix (prefix); key.isNotEmpty())
             return key;
     }
@@ -298,6 +326,10 @@ void PresetBar::refreshList()
 
     auto* root = presetBox.getRootMenu();
     int id = 1, selectedId = 0;
+    currentPresetId = 0;
+
+    root->addItem (9000, TR ("Browse NAM Models…", "浏览 NAM 模型…"));
+    root->addSeparator();
     for (auto& cat : categoryOrder())
     {
         auto it = groups.find (cat);
@@ -306,22 +338,21 @@ void PresetBar::refreshList()
 
         const bool gv = cat == "Gervana";
         juce::PopupMenu sub;
-        if (gv)
-            root->addSectionHeader (juce::String::fromUTF8 ("\xe2\x98\x85 Gervana"));
         for (auto& name : it->second)
         {
             juce::PopupMenu::Item item (L (name.toRawUTF8()));
             item.itemID = id;
             nameById[id] = name;
             if (gv) item.colour = Gervana::gold();
-            (gv ? *root : sub).addItem (item);
-            if (name == currentName) selectedId = id;
+            sub.addItem (item);
+            if (name == currentName)
+            {
+                selectedId = id;
+                currentPresetId = id;
+            }
             ++id;
         }
-        if (gv)
-            root->addSeparator();
-        else
-            root->addSubMenu (categoryLabel (cat) + "  (" + juce::String (it->second.size()) + ")", sub);
+        root->addSubMenu (categoryLabel (cat) + "  (" + juce::String (it->second.size()) + ")", sub);
     }
     if (selectedId > 0)
         presetBox.setSelectedId (selectedId, juce::dontSendNotification);

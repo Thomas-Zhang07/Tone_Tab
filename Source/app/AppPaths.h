@@ -27,7 +27,12 @@ namespace AppPaths
 
     // User data.
     juce::File presetsDir();     // documentsDir()/presets
-    juce::File recordingsDir();  // documentsDir()/recordings
+
+    // Recordings folder (default documentsDir()/recordings, or an override
+    // chosen in the Record view / recording.root setting).
+    void setRecordingsRoot (const juce::File& root);
+    void clearRecordingsRoot();
+    juce::File recordingsDir();
     juce::File tabsDir();        // <app>/scores when writable, else documentsDir()/scores
     juce::File settingsFile();   // userDataDir()/settings.xml
     juce::File practiceLogFile();// userDataDir()/practice_log.json

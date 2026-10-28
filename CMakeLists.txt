@@ -98,9 +98,11 @@ set(TONE_UI_SOURCES
     Source/ui/PedalBoard.cpp
     Source/ui/PresetBar.cpp
     Source/ui/PedalEditor.cpp
+    Source/ui/NamBrowser.cpp
     Source/ui/DrumPanel.cpp
     Source/ui/TabHighway.cpp
     Source/ui/PracticePanel.cpp
+    Source/ui/RecordingPanel.cpp
     Source/ui/TabSearch.cpp
     Source/ui/StatsView.cpp)
 

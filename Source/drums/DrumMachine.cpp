@@ -412,7 +412,11 @@ void DrumVoice::render (float* left, float* right, int numSamples) noexcept
 
 // =============================================================================
 // Drum machine
-DrumMachine::DrumMachine() = default;
+DrumMachine::DrumMachine()
+{
+    for (auto& g : pieceGain)
+        g.store (1.0f);
+}
 
 void DrumMachine::prepare (double sr)
 {
@@ -439,7 +443,7 @@ void DrumMachine::hit (DrumInstrument inst, float velocity, int variant) noexcep
 {
     if (inst == closedHat)
         voices[(size_t) openHat].choke();
-    voices[(size_t) inst].trigger (velocity, variant);
+    voices[(size_t) inst].trigger (velocity * pieceGain[(size_t) inst].load(), variant);
 }
 
 double DrumMachine::stepLengthSamples (int stepIndex) const noexcept
@@ -459,6 +463,7 @@ double DrumMachine::stepLengthSamples (int stepIndex) const noexcept
 void DrumMachine::startStep() noexcept
 {
     const auto& styles = getDrumStyles();
+    currentStep.store (step);
 
     if (step == 0)
     {
@@ -553,6 +558,7 @@ void DrumMachine::render (float* left, float* right, int numSamples) noexcept
     {
         running = false;
         currentBeat.store (-1);
+        currentStep.store (-1);
         inCountIn.store (false);
         inFill.store (false);
     }

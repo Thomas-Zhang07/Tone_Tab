@@ -36,6 +36,15 @@ public:
 
     void initialise (const juce::String& commandLine) override
     {
+        // Keep the designed 1240x800 layout usable on small/high-DPI screens:
+        // don't let Windows scale it beyond the available display area.
+        if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+        {
+            const float fit = juce::jmin (display->userArea.getWidth() / 1240.0f,
+                                          display->userArea.getHeight() / 800.0f);
+            juce::Desktop::getInstance().setGlobalScaleFactor (juce::jlimit (0.75f, 1.0f, fit));
+        }
+
         juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
        #if defined(TONE_TESTS_EMBEDDED)

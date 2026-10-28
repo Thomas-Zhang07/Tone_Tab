@@ -14,12 +14,20 @@
   display name is bilingual and stored inside the XML.
 - Click a pedal to bypass it; double-click to open its controls; drag to reorder;
   right-click for replace/duplicate/delete.
-- **+ Add Effect** adds a built-in effect, a NAM amp model, a cab IR, or a VST3
-  plug-in.
+- **+ Add Tone / FX** opens the tone menu:
+  - **Fender NAM** — all Fender captures straight from the library.
+  - **Browse NAM Models…** — searchable browser for all 270 models, filtered by
+    clean / crunch / high gain / boost / A2 full rig / starter.
+  - **Load NAM Amp Model…** — file picker.
+  - **Load Cab IR…**, then the built-in effect groups and VST3.
+- The preset dropdown starts with **Fender NAM** and **Captures**; Gervana is
+  further down.
 - NAM models expect 48 kHz. A model marked *amp only* needs a cab IR; a
   *full rig* model already contains the cabinet.
-- The drum machine is at the bottom. Space starts/stops it in the tone view.
-  Humanize varies velocity slightly; Auto Fill adds a fill every 2/4/8 bars.
+- **Drums** is its own top tab: large Start/Stop, a visible style grid
+  (Rock/Pop, Groove, Metal/Blues/Jazz, Other), a 16-step pattern display with
+  playhead, Verse/Chorus/Fill, Auto Fill, tempo/tap, swing, humanize, level and a
+  per-piece mixer (kick, snare, hats, toms, cymbals). Space also starts/stops it.
 
 ## Practice view
 
@@ -32,9 +40,15 @@
 - **Wait mode** stops at each note until you play it correctly.
 - The speed trainer raises the tempo after a number of clean passes.
 
-## Recording
+## Record view (top tab)
 
-- **Record** writes a take folder under `Documents\Tone_Tab\recordings`:
+The **Record** tab is the dedicated recording page. It has the record button, the
+take list, replay, delete, refresh and open-folder controls. The practice view's
+small record/replay buttons still work for recording while a tab is open.
+
+- **Record** writes a take folder under the recordings folder (default
+  `Documents\Tone_Tab\recordings`; use **Change Folder…** in the Record view to
+  choose another location, e.g. `E:\guitar_audio\recordings`):
   - `mix.wav` — guitar + effects + drums + backing (stereo)
   - `dry.wav` — raw guitar before input gain (mono)
   - `take.json` — song, track, speed, loop, count-in and sync information

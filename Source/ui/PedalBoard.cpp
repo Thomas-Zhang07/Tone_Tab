@@ -2,6 +2,8 @@
 #include "fx/BuiltinEffects.h"
 #include "fx/NamProcessor.h"
 #include "EffectStyle.h"
+#include "NamBrowser.h"
+#include "app/AppPaths.h"
 #include "Text.h"
 
 namespace
@@ -348,7 +350,7 @@ public:
         g.setFont (juce::FontOptions (30.0f));
         g.drawText ("+", r.withTrimmedBottom (40.0f), juce::Justification::centred);
         g.setFont (juce::FontOptions (13.0f));
-        g.drawText (TR ("Add Effect", "添加效果"), r.withTrimmedTop (60.0f), juce::Justification::centred);
+        g.drawText (TR ("Add Tone / FX", "添加音色 / 效果"), r.withTrimmedTop (60.0f), juce::Justification::centred);
     }
 
     void mouseUp (const juce::MouseEvent& e) override
@@ -387,11 +389,10 @@ PedalBoard::PedalBoard (EffectChain& c, std::function<void()> openPluginManager)
     chain.onSlotRemoved = [this] (EffectSlot* s) { closeEditor (s); };
 
     lastNamFolder = lastIrFolder = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
-    if (const auto lib = EffectChain::getToneLibrary(); lib.isDirectory())
-    {
-        lastNamFolder = lib.getChildFile ("NAM").isDirectory() ? lib.getChildFile ("NAM") : lib;
-        lastIrFolder  = lib.getChildFile ("IR").isDirectory()  ? lib.getChildFile ("IR")  : lib;
-    }
+    if (const auto models = AppPaths::modelsDir(); models.isDirectory())
+        lastNamFolder = models;
+    if (const auto irs = AppPaths::irDir(); irs.isDirectory())
+        lastIrFolder = irs;
     rebuild();
 }
 
@@ -555,6 +556,20 @@ void PedalBoard::chooseFile (bool nam, int index, bool replaceExisting)
     });
 }
 
+void PedalBoard::addNamFile (const juce::File& file, int index)
+{
+    juce::String error;
+    auto slot = chain.createNam (file, error);
+    if (slot == nullptr)
+    {
+        showError (error);
+        return;
+    }
+
+    lastNamFolder = file.getParentDirectory();
+    chain.insert (slot, index);
+}
+
 void PedalBoard::duplicate (int index)
 {
     const auto& slots = chain.getSlots();
@@ -629,11 +644,52 @@ void PedalBoard::showAddMenu (juce::Component* target)
     const int insertIndex = (int) chain.getSlots().size();
 
     juce::PopupMenu m;
+
+    // Fender captures first, straight from the NAM index.
+    juce::PopupMenu fender;
+    std::vector<juce::File> fenderFiles;
+    if (auto index = juce::JSON::parse (AppPaths::modelsDir().getChildFile ("index.json")); auto* entries = index.getArray())
+    {
+        for (auto& item : *entries)
+        {
+            auto meta = item["metadata"];
+            const auto text = meta["gearMake"].toString() + " " + meta["gearModel"].toString()
+                            + " " + meta["name"].toString();
+            if (! text.containsIgnoreCase ("fender"))
+                continue;
+
+            auto file = AppPaths::modelsDir().getChildFile (item["file"].toString());
+            if (! file.existsAsFile())
+                continue;
+
+            auto name = meta["name"].toString();
+            if (name.isEmpty())
+                name = file.getFileNameWithoutExtension();
+
+            fender.addItem (9000 + (int) fenderFiles.size(), name);
+            fenderFiles.push_back (file);
+        }
+    }
+
+    if (! fenderFiles.empty())
+    {
+        m.addSectionHeader (TR ("Fender NAM", "Fender NAM"));
+        m.addSubMenu (TR ("Fender models", "Fender 模型"), fender);
+        m.addSeparator();
+    }
+
+    // Tone sources: this is where the NAM library lives.
+    m.addSectionHeader (TR ("NAM / Cab IR", "NAM 箱头 / 箱体"));
+    m.addItem (4, TR ("Browse NAM Models…", "浏览 NAM 模型…"));
+    m.addItem (1, TR ("Load NAM Amp Model…", "加载 NAM 箱头模型…"));
+    m.addItem (2, TR ("Load Cab IR…", "加载箱体 IR…"));
+    m.addSeparator();
+
     juce::StringArray categories;
     for (auto& b : builtins)
         categories.addIfNotAlreadyThere (b.category);
 
-    // Gervana 系列放最前面，单独一组，金色字
+    // Gervana 系列单独一组，金色字
     m.addSectionHeader ("Gervana");
     for (int i = 0; i < (int) builtins.size(); ++i)
         if (builtins[(size_t) i].category == Gervana::category)
@@ -656,9 +712,6 @@ void PedalBoard::showAddMenu (juce::Component* target)
     }
 
     m.addSeparator();
-    m.addItem (1, TR ("Load NAM Amp Model…", "加载 NAM 箱头模型…"));
-    m.addItem (2, TR ("Load Cab IR…", "加载箱体 IR…"));
-    m.addSeparator();
 
     auto types = chain.getKnownPlugins().getTypes();
     std::sort (types.begin(), types.end(), [] (const auto& a, const auto& b)
@@ -673,9 +726,11 @@ void PedalBoard::showAddMenu (juce::Component* target)
     m.addItem (3, TR ("Manage / Scan VST3 Plug-ins…", "管理 / 扫描 VST3 插件…"));
 
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (target),
-                     [this, insertIndex, types] (int r)
+                     [this, insertIndex, types, fenderFiles] (int r)
     {
-        if (r >= 5000 && r - 5000 < types.size())
+        if (r >= 9000 && r - 9000 < (int) fenderFiles.size())
+            addNamFile (fenderFiles[(size_t) (r - 9000)], insertIndex);
+        else if (r >= 5000 && r - 5000 < types.size())
         {
             juce::String error;
             if (auto slot = chain.createPlugin (types[r - 5000], error))
@@ -689,6 +744,8 @@ void PedalBoard::showAddMenu (juce::Component* target)
             if (r - 1000 < (int) list.size())
                 chain.insert (chain.createBuiltin (list[(size_t) (r - 1000)].id), insertIndex);
         }
+        else if (r == 4) NamBrowser::show (this, [this, insertIndex] (juce::File file)
+                                            { addNamFile (file, insertIndex); });
         else if (r == 1) chooseFile (true, insertIndex, false);
         else if (r == 2) chooseFile (false, insertIndex, false);
         else if (r == 3 && onOpenPluginManager) onOpenPluginManager();
