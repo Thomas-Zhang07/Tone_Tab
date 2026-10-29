@@ -693,6 +693,20 @@ void DrumPanel::setStyle (int index)
     drums.setStyle (selectedStyle);
     applyStyleDefaults();
     updateStyleButtons();
+
+    // Selecting Custom shows one part at a time; make playback follow it so
+    // edits are audible immediately.
+    if (selectedStyle == getCustomDrumStyleIndex())
+    {
+        const int part = juce::jlimit (1, 3, editPartBox.getSelectedId());
+        if (part == 1 || part == 2)
+        {
+            const bool chorus = part == 2;
+            drums.setChorus (chorus);
+            (chorus ? chorusButton : verseButton).setToggleState (true, juce::dontSendNotification);
+        }
+    }
+
     updateEditUi();
     save();
     repaint (patternArea);
