@@ -673,6 +673,7 @@ void DrumPanel::setStyle (int index)
     drums.setStyle (selectedStyle);
     applyStyleDefaults();
     updateStyleButtons();
+    updateEditUi();
     save();
     repaint (patternArea);
 }
