@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<Chain displayName="Mayer - Slow Blues Lead">
+  <Slot kind="builtin" id="gate">
+    <Params threshold="-64" release="120" attack="1"/>
+  </Slot>
+  <Slot kind="builtin" id="overdrive">
+    <Params model="3" drive="12" tone="0.55" level="-2" bass="0.5" blend="0"/>
+  </Slot>
+  <Slot kind="nam" path="@app/assets/nam/community/Tudor N Ceriatone Molecular 50.nam">
+    <Params output="2" bass="0.5" mid="1" treble="0.5"/>
+  </Slot>
+  <Slot kind="builtin" id="cab">
+    <Params type="0" lowcut="80" bright="0.55" resonance="2.5" mic="0.4" level="0"/>
+  </Slot>
+  <Slot kind="builtin" id="delay">
+    <Params time="400" feedback="0.26" mix="0.14" tone="4200" type="1" mod="0.12"/>
+  </Slot>
+  <Slot kind="builtin" id="reverb">
+    <Params type="2" size="0.5" damping="0.45" predelay="25" mix="0.18"/>
+  </Slot>
+</Chain>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<Chain displayName="Mayer - Trio Grit">
+  <Slot kind="builtin" id="gate">
+    <Params threshold="-62" release="90" attack="1"/>
+  </Slot>
+  <Slot kind="builtin" id="overdrive">
+    <Params model="3" drive="18" tone="0.58" level="-4" bass="0" blend="0"/>
+  </Slot>
+  <Slot kind="nam" path="@app/assets/nam/tone3000_a2/01_fender-super-reverb-1965_edge-of-breakup_cab-a2.nam">
+    <Params output="0" bass="0.5" mid="0.5" treble="1"/>
+  </Slot>
+  <Slot kind="builtin" id="reverb">
+    <Params type="0" size="0.3" damping="0.6" predelay="8" mix="0.1"/>
+  </Slot>
+</Chain>

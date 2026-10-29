@@ -50,8 +50,9 @@ DrumPanel::DrumPanel (DrumMachine& d, juce::PropertiesFile& s) : drums (d), sett
     caption (rockPopLabel, TR ("Rock / Pop", "摇滚 / 流行"));
     caption (grooveLabel, TR ("Groove", "律动"));
     caption (metalLabel, TR ("Metal / Blues / Jazz", "金属 / 蓝调 / 爵士"));
+    caption (bluesSoulLabel, TR ("Blues / Soul", "蓝调 / 灵魂乐"));
     caption (otherLabel, TR ("Other", "其他"));
-    for (auto* l : { &rockPopLabel, &grooveLabel, &metalLabel, &otherLabel })
+    for (auto* l : { &rockPopLabel, &grooveLabel, &metalLabel, &bluesSoulLabel, &otherLabel })
         addAndMakeVisible (*l);
 
     auto addStyle = [this] (int index)
@@ -68,10 +69,11 @@ DrumPanel::DrumPanel (DrumMachine& d, juce::PropertiesFile& s) : drums (d), sett
         addAndMakeVisible (b);
     };
 
-    for (int i : { 0, 1, 5 })   addStyle (i);   // Rock, Pop, Punk
-    for (int i : { 3, 4, 8 })   addStyle (i);   // Funk, Disco, Reggae
-    for (int i : { 6, 7, 9, 10 }) addStyle (i); // Metal, Blues, Jazz, Waltz
-    for (int i : { 2, 11 })     addStyle (i);   // Ballad, Click only
+    for (int i : { 0, 1, 5 })   addStyle (i);        // Rock, Pop, Punk
+    for (int i : { 3, 4, 8 })   addStyle (i);        // Funk, Disco, Reggae
+    for (int i : { 6, 7, 9, 10, 16 }) addStyle (i);  // Metal, Blues, Jazz, Waltz, Blues Rock
+    for (int i : { 12, 13, 14, 15 }) addStyle (i);   // Slow Blues, Mayer Soul/Shuffle, Texas
+    for (int i : { 2, 11, 17 })     addStyle (i);    // Ballad, Click only, Custom
 
     // ---- Section controls -----------------------------------------------------
     for (auto* b : { &verseButton, &chorusButton })
@@ -100,6 +102,22 @@ DrumPanel::DrumPanel (DrumMachine& d, juce::PropertiesFile& s) : drums (d), sett
     fillBox.setTooltip (TR ("Add a fill automatically every N bars", "每 N 小节自动加一段加花"));
     fillBox.onChange = [this] { drums.setFillEvery (fillBox.getSelectedId() == 1 ? 0 : fillBox.getSelectedId()); save(); };
     addAndMakeVisible (fillBox);
+
+    // ---- Custom pattern editing -----------------------------------------------
+    editPartBox.addItem (TR ("Edit: Verse", "编辑：主歌"), 1);
+    editPartBox.addItem (TR ("Edit: Chorus", "编辑：副歌"), 2);
+    editPartBox.addItem (TR ("Edit: Fill", "编辑：加花"), 3);
+    editPartBox.setSelectedId (1, juce::dontSendNotification);
+    editPartBox.setTooltip (TR ("Which part of the Custom groove the step grid edits",
+                                "步进格编辑自定义节奏的哪个段落"));
+    editPartBox.onChange = [this] { updateEditUi(); save(); repaint (patternArea); };
+    addAndMakeVisible (editPartBox);
+
+    clearPartButton.setButtonText (TR ("Clear Part", "清空"));
+    clearPartButton.setTooltip (TR ("Remove every hit in the selected part",
+                                    "删除所选段落的全部音符"));
+    clearPartButton.onClick = [this] { clearEditPart(); };
+    addAndMakeVisible (clearPartButton);
 
     // ---- Feel and level -------------------------------------------------------
     caption (feelHeader, TR ("Feel & Level", "手感与音量"), 15.0f, juce::Colours::white, true);
@@ -176,6 +194,9 @@ DrumPanel::DrumPanel (DrumMachine& d, juce::PropertiesFile& s) : drums (d), sett
     }
 
     // ---- Restore settings -----------------------------------------------------
+    loadCustomDrums();
+    editPartBox.setSelectedId (juce::jlimit (1, 3, settings.getIntValue ("drumEditPart", 1)),
+                               juce::dontSendNotification);
     selectedStyle = juce::jlimit (0, (int) styles.size() - 1, settings.getIntValue ("drumStyle", 0));
     drums.setStyle (selectedStyle);
     updateStyleButtons();
@@ -204,6 +225,7 @@ DrumPanel::DrumPanel (DrumMachine& d, juce::PropertiesFile& s) : drums (d), sett
     applyMixer();
 
     updatePlayButton();
+    updateEditUi();
     startTimerHz (30);
 }
 
@@ -226,7 +248,7 @@ void DrumPanel::resized()
     area.removeFromTop (6);
 
     // Top row: style grid on the left, feel controls on the right.
-    const int topH = juce::jlimit (210, 270, (int) (area.getHeight() * 0.45f));
+    const int topH = juce::jlimit (244, 300, (int) (area.getHeight() * 0.45f));
     auto top = area.removeFromTop (topH);
     const int leftW = juce::jlimit (320, 480, (int) (top.getWidth() * 0.55f));
     auto left = top.removeFromLeft (leftW);
@@ -262,10 +284,13 @@ void DrumPanel::resized()
     placeRow (3, 3);
     l.removeFromTop (2);
     metalLabel.setBounds (l.removeFromTop (16));
-    placeRow (6, 4);
+    placeRow (6, 5);
+    l.removeFromTop (2);
+    bluesSoulLabel.setBounds (l.removeFromTop (16));
+    placeRow (11, 4);
     l.removeFromTop (2);
     otherLabel.setBounds (l.removeFromTop (16));
-    placeRow (10, 2);
+    placeRow (15, 3);
 
     // Bottom: section + fill, then the per-piece mixer.
     auto sectionRow = bottom.removeFromTop (30);
@@ -292,7 +317,11 @@ void DrumPanel::resized()
 
     // Right: feel.
     auto r = right;
-    feelHeader.setBounds (r.removeFromTop (20));
+    auto feelTop = r.removeFromTop (20);
+    feelHeader.setBounds (feelTop.removeFromLeft (110));
+    clearPartButton.setBounds (feelTop.removeFromRight (74).reduced (0, 1));
+    feelTop.removeFromRight (4);
+    editPartBox.setBounds (feelTop.removeFromRight (150).reduced (0, 1));
 
     auto addSlider = [&r] (juce::Label& label, juce::Slider& slider)
     {
@@ -327,8 +356,14 @@ void DrumPanel::paintPattern (juce::Graphics& g, juce::Rectangle<int> area)
     const auto& st = styles[(size_t) juce::jlimit (0, (int) styles.size() - 1, selectedStyle)];
     const int steps = juce::jlimit (1, 16, st.beatsPerBar * st.stepsPerBeat);
 
-    const auto& p = drums.isInFill() ? st.fill
-                  : (drums.isChorus() ? st.chorus : st.verse);
+    // When the Custom style is selected the grid shows the part being edited;
+    // otherwise it follows the playing section.
+    const bool editingCustom = selectedStyle == getCustomDrumStyleIndex();
+    const int editPart = juce::jlimit (1, 3, editPartBox.getSelectedId());
+    const auto& p = editingCustom
+                        ? (editPart == 2 ? st.chorus : editPart == 3 ? st.fill : st.verse)
+                        : (drums.isInFill() ? st.fill
+                                            : (drums.isChorus() ? st.chorus : st.verse));
 
     const DrumInstrument rows[] = { kick, snare, closedHat, openHat, crash, ride, tomHigh, tomMid, tomLow };
     const char* names[] = { "Kick", "Snare", "Hat", "Open", "Crash", "Ride", "Tom H", "Tom M", "Tom L" };
@@ -405,6 +440,213 @@ void DrumPanel::paintPattern (juce::Graphics& g, juce::Rectangle<int> area)
     g.drawRect (area);
 }
 
+bool DrumPanel::cellAt (juce::Point<int> position, int& row, int& step) const
+{
+    if (! patternArea.contains (position))
+        return false;
+
+    const auto& styles = getDrumStyles();
+    const auto& st = styles[(size_t) juce::jlimit (0, (int) styles.size() - 1, selectedStyle)];
+    const int steps = juce::jlimit (1, 16, st.beatsPerBar * st.stepsPerBeat);
+
+    constexpr int headerH = 22, labelW = 56, rowCount = 9;
+    const int x = position.x - patternArea.getX();
+    const int y = position.y - patternArea.getY();
+    if (x < labelW || y < headerH)
+        return false;
+
+    const float cellW = (float) juce::jmax (1, patternArea.getWidth() - labelW) / (float) steps;
+    const float rowH = (float) (patternArea.getHeight() - headerH) / (float) rowCount;
+    if (cellW <= 0.0f || rowH <= 0.0f)
+        return false;
+
+    step = (int) ((float) (x - labelW) / cellW);
+    row = (int) ((float) (y - headerH) / rowH);
+    return step >= 0 && step < steps && row >= 0 && row < rowCount;
+}
+
+DrumPattern* DrumPanel::editPattern()
+{
+    auto& custom = getCustomDrumStyle();
+    switch (juce::jlimit (1, 3, editPartBox.getSelectedId()))
+    {
+        case 2:  return &custom.chorus;
+        case 3:  return &custom.fill;
+        default: return &custom.verse;
+    }
+}
+
+void DrumPanel::copySelectedStyleToCustom()
+{
+    const int customIndex = getCustomDrumStyleIndex();
+    if (selectedStyle == customIndex)
+        return;
+
+    const DrumStyle source = getDrumStyles()[(size_t) selectedStyle];
+    auto& custom = getCustomDrumStyle();
+    custom = source;
+    custom.name = TR ("Custom", "自定义");
+    custom.clickOnly = false;
+
+    selectedStyle = customIndex;
+    drums.setStyle (customIndex);
+    bpmSlider.setValue (custom.defaultBpm);
+    swingSlider.setValue (custom.defaultSwing * 100.0);
+    updateStyleButtons();
+    updateEditUi();
+}
+
+void DrumPanel::mouseDown (const juce::MouseEvent& e)
+{
+    int row = 0, step = 0;
+    if (! cellAt (e.getPosition(), row, step))
+        return;
+
+    // Editing a built-in pattern makes a Custom copy first, so the original
+    // style is never destroyed. Match the part that was on screen.
+    if (selectedStyle != getCustomDrumStyleIndex())
+    {
+        const int shownPart = drums.isInFill() ? 3 : (drums.isChorus() ? 2 : 1);
+        editPartBox.setSelectedId (shownPart, juce::dontSendNotification);
+        copySelectedStyleToCustom();
+    }
+
+    auto* p = editPattern();
+    if (p == nullptr || step >= p->steps)
+        return;
+
+    static const DrumInstrument rows[] = { kick, snare, closedHat, openHat, crash,
+                                           ride, tomHigh, tomMid, tomLow };
+    auto& v = p->velocity[(size_t) rows[row]][(size_t) step];
+
+    // Left click cycles off -> normal -> accent -> ghost -> off.
+    // Right click clears the cell.
+    if (e.mods.isRightButtonDown())
+        v = 0.0f;
+    else if (v <= 0.0f)
+        v = 0.7f;
+    else if (v > 0.9f)
+        v = 0.28f;
+    else if (v > 0.34f)
+        v = 1.0f;
+    else
+        v = 0.0f;
+
+    save();
+    repaint (patternArea);
+}
+
+void DrumPanel::clearEditPart()
+{
+    if (selectedStyle != getCustomDrumStyleIndex())
+        copySelectedStyleToCustom();
+
+    if (auto* p = editPattern())
+        for (auto& instrument : p->velocity)
+            for (auto& v : instrument)
+                v = 0.0f;
+
+    save();
+    repaint (patternArea);
+}
+
+void DrumPanel::updateEditUi()
+{
+    const bool custom = selectedStyle == getCustomDrumStyleIndex();
+    patternHeader.setText (custom ? TR ("Pattern — click cells to edit", "节奏型 — 点击格子编辑")
+                                  : TR ("Pattern — click to copy into Custom", "节奏型 — 点击会复制到自定义"),
+                           juce::dontSendNotification);
+    clearPartButton.setEnabled (custom);
+}
+
+void DrumPanel::loadCustomDrums()
+{
+    const auto text = settings.getValue ("customDrums");
+    if (text.isEmpty())
+        return;
+
+    auto xml = juce::parseXML (text);
+    if (xml == nullptr)
+        return;
+
+    auto& s = getCustomDrumStyle();
+    s.beatsPerBar = juce::jlimit (1, 12, xml->getIntAttribute ("beatsPerBar", s.beatsPerBar));
+    s.stepsPerBeat = juce::jlimit (1, 4, xml->getIntAttribute ("stepsPerBeat", s.stepsPerBeat));
+    s.defaultBpm = (float) juce::jlimit (30.0, 300.0, xml->getDoubleAttribute ("bpm", (double) s.defaultBpm));
+    s.defaultSwing = (float) juce::jlimit (0.0, 1.0, xml->getDoubleAttribute ("swing", (double) s.defaultSwing));
+    s.clickOnly = false;
+
+    auto loadPart = [&xml] (const char* tag, DrumPattern& p)
+    {
+        auto* part = xml->getChildByName (tag);
+        if (part == nullptr)
+            return;
+
+        p = DrumPattern {};
+        p.steps = juce::jlimit (1, 16, part->getIntAttribute ("steps", 16));
+        for (auto* inst : part->getChildWithTagNameIterator ("Inst"))
+        {
+            const int index = inst->getIntAttribute ("index", -1);
+            if (! juce::isPositiveAndBelow (index, (int) clickHigh))
+                continue;
+
+            const auto values = juce::StringArray::fromTokens (inst->getStringAttribute ("v"), ",", "");
+            for (int i = 0; i < values.size() && i < 16; ++i)
+                p.velocity[(size_t) index][(size_t) i] = juce::jlimit (0.0f, 1.0f, values[i].getFloatValue());
+        }
+    };
+
+    loadPart ("verse", s.verse);
+    loadPart ("verseB", s.verseB);
+    loadPart ("chorus", s.chorus);
+    loadPart ("chorusB", s.chorusB);
+    loadPart ("fill", s.fill);
+}
+
+void DrumPanel::saveCustomDrums()
+{
+    const auto& s = getCustomDrumStyle();
+    juce::XmlElement xml ("CustomDrums");
+    xml.setAttribute ("beatsPerBar", s.beatsPerBar);
+    xml.setAttribute ("stepsPerBeat", s.stepsPerBeat);
+    xml.setAttribute ("bpm", (double) s.defaultBpm);
+    xml.setAttribute ("swing", (double) s.defaultSwing);
+
+    auto addPart = [&xml] (const char* tag, const DrumPattern& p)
+    {
+        auto* part = xml.createNewChildElement (tag);
+        part->setAttribute ("steps", p.steps);
+
+        const int n = juce::jlimit (0, 16, p.steps);
+        for (int inst = 0; inst < (int) clickHigh; ++inst)
+        {
+            juce::StringArray values;
+            bool any = false;
+            for (int i = 0; i < n; ++i)
+            {
+                const float v = p.velocity[(size_t) inst][(size_t) i];
+                any = any || v > 0.0f;
+                values.add (juce::String (v, 3));
+            }
+
+            if (! any)
+                continue;
+
+            auto* e = part->createNewChildElement ("Inst");
+            e->setAttribute ("index", inst);
+            e->setAttribute ("v", values.joinIntoString (","));
+        }
+    };
+
+    addPart ("verse", s.verse);
+    addPart ("verseB", s.verseB);
+    addPart ("chorus", s.chorus);
+    addPart ("chorusB", s.chorusB);
+    addPart ("fill", s.fill);
+
+    settings.setValue ("customDrums", xml.toString (juce::XmlElement::TextFormat().singleLine()));
+}
+
 void DrumPanel::timerCallback()
 {
     updatePlayButton();
@@ -456,8 +698,10 @@ void DrumPanel::save()
     settings.setValue ("drumFillEvery", drums.getFillEvery());
     settings.setValue ("drumCountIn", countInToggle.getToggleState());
     settings.setValue ("drumMetronome", metronomeToggle.getToggleState());
+    settings.setValue ("drumEditPart", editPartBox.getSelectedId());
     for (int i = 0; i < 5; ++i)
         settings.setValue ("drumMix" + juce::String (i), mixSliders[(size_t) i]->getValue());
+    saveCustomDrums();
 }
 
 void DrumPanel::togglePlay()

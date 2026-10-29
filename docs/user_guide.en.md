@@ -20,14 +20,19 @@
     clean / crunch / high gain / boost / A2 full rig / starter.
   - **Load NAM Amp Model…** — file picker.
   - **Load Cab IR…**, then the built-in effect groups and VST3.
-- The preset dropdown starts with **Fender NAM** and **Captures**; Gervana is
-  further down.
+- The preset dropdown starts with **Fender NAM**, **Mayer** and **Captures**;
+  the **Classic Rock** pack sits under **Classic**, and Gervana is further down.
 - NAM models expect 48 kHz. A model marked *amp only* needs a cab IR; a
   *full rig* model already contains the cabinet.
 - **Drums** is its own top tab: large Start/Stop, a visible style grid
-  (Rock/Pop, Groove, Metal/Blues/Jazz, Other), a 16-step pattern display with
-  playhead, Verse/Chorus/Fill, Auto Fill, tempo/tap, swing, humanize, level and a
-  per-piece mixer (kick, snare, hats, toms, cymbals). Space also starts/stops it.
+  (Rock/Pop, Groove, Metal/Blues/Jazz, Blues/Soul, Other), a 16-step pattern
+  display with playhead, Verse/Chorus/Fill, Auto Fill, tempo/tap, swing,
+  humanize, level and a per-piece mixer (kick, snare, hats, toms, cymbals).
+  Space also starts/stops it.
+- To make your own groove, select **Custom** (or click any style's grid to copy
+  it into Custom). Click a cell to cycle off → normal → accent → ghost;
+  right-click clears it. **Edit: Verse/Chorus/Fill** chooses the part,
+  **Clear Part** empties it, and the result is saved automatically.
 
 ## Practice view
 

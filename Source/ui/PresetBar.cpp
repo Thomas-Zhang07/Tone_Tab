@@ -242,6 +242,7 @@ namespace
     juce::String categoryLabel (const juce::String& key)
     {
         if (key == "Gervana")     return "Gervana";
+        if (key == "mayer")       return "Mayer";
         if (key == "basic")       return TR ("Basic", "基础");
         if (key == "classic")     return TR ("Classic", "经典");
         if (key == "fender")      return TR ("Fender NAM", "Fender NAM");
@@ -280,13 +281,19 @@ namespace
 
 const juce::StringArray& PresetBar::categoryOrder()
 {
-    static const juce::StringArray order { "fender", "nam", "basic", "classic", "pioneer", "postrock",
+    static const juce::StringArray order { "fender", "mayer", "nam", "basic", "classic", "pioneer", "postrock",
                                            "psychedelic", "postpunk", "weird", "bass", "Gervana", "user" };
     return order;
 }
 
 juce::String PresetBar::categoryOf (const juce::String& name)
 {
+    // Artist / style preset packs use "Mayer - ..." and "Classic Rock - ...".
+    if (name.startsWithIgnoreCase ("Mayer - "))
+        return "mayer";
+    if (name.startsWithIgnoreCase ("Classic Rock - "))
+        return "classic";
+
     if (Gervana::isGervanaPreset (name))
         return "Gervana";
 

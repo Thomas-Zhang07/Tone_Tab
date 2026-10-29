@@ -17,6 +17,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
 
 private:
     void timerCallback() override;
@@ -25,20 +26,27 @@ private:
     void save();
     void updatePlayButton();
     void updateStyleButtons();
+    void updateEditUi();
     void applyMixer();
     void paintPattern (juce::Graphics&, juce::Rectangle<int> area);
+    bool cellAt (juce::Point<int> position, int& row, int& step) const;
+    DrumPattern* editPattern();
+    void copySelectedStyleToCustom();
+    void clearEditPart();
+    void loadCustomDrums();
+    void saveCustomDrums();
 
     DrumMachine& drums;
     juce::PropertiesFile& settings;
     int selectedStyle = 0;
 
     juce::Label title, status;
-    juce::Label styleHeader, rockPopLabel, grooveLabel, metalLabel, otherLabel;
+    juce::Label styleHeader, rockPopLabel, grooveLabel, metalLabel, bluesSoulLabel, otherLabel;
     juce::Label patternHeader, feelHeader, mixerHeader;
 
-    juce::TextButton playButton, fillNowButton, tapButton, verseButton, chorusButton;
+    juce::TextButton playButton, fillNowButton, tapButton, verseButton, chorusButton, clearPartButton;
     juce::OwnedArray<juce::TextButton> styleButtons;
-    juce::ComboBox fillBox;
+    juce::ComboBox fillBox, editPartBox;
     juce::ToggleButton countInToggle, metronomeToggle;
 
     juce::Label bpmLabel, swingLabel, volumeLabel, humanizeLabel;

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<Chain displayName="Mayer - Clean Twin">
+  <Slot kind="builtin" id="comp">
+    <Params threshold="-28" ratio="2.5" attack="20" release="180" makeup="2" tone="0.5"/>
+  </Slot>
+  <Slot kind="nam" path="@app/assets/nam/tone3000_a2/05_fender-twin-67_clean_lenny-dirty-pool.nam">
+    <Params output="2" bass="1" mid="-1" treble="1"/>
+  </Slot>
+  <Slot kind="builtin" id="delay" bypass="1">
+    <Params time="340" feedback="0.18" mix="0.1" tone="4200" type="1" mod="0.1"/>
+  </Slot>
+  <Slot kind="builtin" id="reverb">
+    <Params type="2" size="0.5" damping="0.45" predelay="20" mix="0.18"/>
+  </Slot>
+</Chain>

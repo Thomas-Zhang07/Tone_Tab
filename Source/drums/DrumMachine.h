@@ -36,6 +36,11 @@ struct DrumStyle
 
 const std::vector<DrumStyle>& getDrumStyles();
 
+// The last style in getDrumStyles() is an editable copy of "Mayer Soul".
+// The Drums view edits it in place; DrumPanel persists it in settings.
+DrumStyle& getCustomDrumStyle();
+int getCustomDrumStyleIndex();
+
 // =============================================================================
 // Synthesised drum voice (no sample files). Each piece can use two pitched body
 // oscillators, a click/beater transient, and a filtered noise layer.

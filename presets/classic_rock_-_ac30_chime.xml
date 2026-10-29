@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<Chain displayName="Classic Rock - AC30 Chime">
+  <Slot kind="nam" path="@app/assets/nam/community/Phillipe P VOXAC15-TopBoost.nam">
+    <Params output="3" bass="0.5" mid="1" treble="0.5"/>
+  </Slot>
+  <Slot kind="builtin" id="cab">
+    <Params type="0" lowcut="85" bright="0.6" resonance="2" mic="0.4" level="0"/>
+  </Slot>
+  <Slot kind="builtin" id="delay">
+    <Params time="360" feedback="0.24" mix="0.14" tone="5000" type="1" mod="0.1"/>
+  </Slot>
+  <Slot kind="builtin" id="reverb">
+    <Params type="2" size="0.5" damping="0.45" predelay="18" mix="0.18"/>
+  </Slot>
+</Chain>

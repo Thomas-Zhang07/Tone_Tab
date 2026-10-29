@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<Chain displayName="Classic Rock - Plexi Crunch">
+  <Slot kind="builtin" id="gate">
+    <Params threshold="-66" release="100" attack="1"/>
+  </Slot>
+  <Slot kind="nam" path="@app/assets/nam/community/Sascha S DirtyShirleyMini_crunch_G6.nam">
+    <Params output="3" bass="0.5" mid="1" treble="0.5"/>
+  </Slot>
+  <Slot kind="builtin" id="cab">
+    <Params type="2" lowcut="75" bright="0.55" resonance="4" mic="0.35" level="0"/>
+  </Slot>
+  <Slot kind="builtin" id="reverb">
+    <Params type="0" size="0.35" damping="0.6" predelay="10" mix="0.1"/>
+  </Slot>
+</Chain>

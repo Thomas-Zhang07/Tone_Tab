@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<Chain displayName="Mayer - Edge of Breakup">
+  <Slot kind="builtin" id="comp">
+    <Params threshold="-26" ratio="3" attack="15" release="170" makeup="3" tone="0.5"/>
+  </Slot>
+  <Slot kind="nam" path="@app/assets/nam/tone3000_a2/01_fender-super-reverb-1965_edge-of-breakup_cab-a2.nam">
+    <Params output="1" bass="0.5" mid="0.5" treble="0.5"/>
+  </Slot>
+  <Slot kind="builtin" id="delay" bypass="1">
+    <Params time="380" feedback="0.22" mix="0.12" tone="4200" type="1" mod="0.1"/>
+  </Slot>
+  <Slot kind="builtin" id="reverb">
+    <Params type="2" size="0.45" damping="0.5" predelay="18" mix="0.15"/>
+  </Slot>
+</Chain>

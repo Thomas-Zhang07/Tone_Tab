@@ -48,6 +48,9 @@ assets/
 Recordings/
 recordings/
 Presets/
+# Starter presets shipped with the app (XML only; no NAM audio).
+!/presets/
+!/presets/**
 
 # ---------------------------------------------------------------------------
 # Packages

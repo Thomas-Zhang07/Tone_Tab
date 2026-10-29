@@ -89,14 +89,18 @@ namespace
     }
 }
 
-const std::vector<DrumStyle>& getDrumStyles()
+namespace
 {
-    // One row per piece, one character per step:
-    //   X accent   x normal   o light   g ghost   . rest
-    //   K kick  S snare  R rim  H closed hat  O open hat  C crash  D ride
-    //   T1/T2/T3 high/mid/floor tom
-    static const std::vector<DrumStyle> styles {
-        style ("Rock", "摇滚", 4, 4, 110, 0,
+    std::vector<DrumStyle>& drumStyleStorage()
+    {
+        // One row per piece, one character per step:
+        //   X accent   x normal   o light   g ghost   . rest
+        //   K kick  S snare  R rim  H closed hat  O open hat  C crash  D ride
+        //   T1/T2/T3 high/mid/floor tom
+        static std::vector<DrumStyle> styles = []
+        {
+            std::vector<DrumStyle> v {
+                style ("Rock", "摇滚", 4, 4, 110, 0,
                pattern (16, { { "H", "x.x.x.x.x.x.x.x." }, { "K", "X.....X.X......." }, { "S", "....X.......X..." } }),
                pattern (16, { { "D", "X.x.X.x.X.x.X.x." }, { "K", "X.....X.X.X....." }, { "S", "....X.......X..." } }),
                pattern (16, { { "H", "x.x.x.x........." }, { "K", "X.....X........." }, { "S", "....X...Xx......" },
@@ -121,7 +125,7 @@ const std::vector<DrumStyle>& getDrumStyles()
         style ("Funk", "放克", 4, 4, 96, 0.15f,
                pattern (16, { { "H", "XxxxXxxxXxxxXxxx" }, { "K", "X..X..X...X..X.." }, { "S", "....X..g.g..X..g" } }),
                pattern (16, { { "H", "XxxxXxxxXxxxXx.." }, { "O", "..............X." }, { "K", "X..X..X...XX..X." }, { "S", "....X..g.g..X..g" } }),
-               pattern (16, { { "H", "XxxxXxxx........" }, { "K", "X..X..X........" }, { "S", "....X..gXgXgXXXX" } }),
+               pattern (16, { { "H", "XxxxXxxx........" }, { "K", "X..X..X........." }, { "S", "....X..gXgXgXXXX" } }),
                pattern (16, { { "H", "XxxxXxxxXxxxXxxx" }, { "K", "X..X..X..X.X...." }, { "S", "....X..g.g..X..g" } }),
                pattern (16, { { "H", "XxxxXxxxXxxxXxxx" }, { "K", "X..X..X..X..X..X" }, { "S", "....X..gXg..X..g" } })),
 
@@ -177,8 +181,86 @@ const std::vector<DrumStyle>& getDrumStyles()
         style ("Click only", "仅节拍器", 4, 4, 100, 0,
                pattern (16, {}), pattern (16, {}), pattern (16, {}),
                DrumPattern {}, DrumPattern {}, true),
-    };
-    return styles;
+
+        // ---- Blues / Mayer pack -------------------------------------------------
+        // 12/8 slow blues: ride on every triplet, kick 1 & 3, backbeat 2 & 4.
+        style ("Slow Blues", "慢蓝调", 4, 3, 60, 0,
+               pattern (12, { { "H", "X.xX.xX.xX.x" }, { "K", "X.....X....." }, { "S", "...X.....X.." } }),
+               pattern (12, { { "D", "X.xX.xX.xX.x" }, { "K", "X..X..X..X.." }, { "S", "...X.....X.." } }),
+               pattern (12, { { "H", "X.x........." }, { "K", "X..........." }, { "S", "...X..XxxXxx" },
+                              { "T1", "......XX...." }, { "T2", "........XX.." }, { "T3", "..........XX" } }),
+               pattern (12, { { "D", "X.xX.xX.xX.x" }, { "K", "X..X..X....." }, { "S", "...X..g..X.." } }),
+               pattern (12, { { "D", "X.xX.xX.xX.x" }, { "K", "X..X..X..X.." }, { "S", "...X..g..X.." },
+                              { "O", "...........X" } })),
+
+        // Slow-soul backbeat in the style of a Mayer ballad: sparse kick, lazy
+        // backbeat and ghosted snare, eighth-note hats.
+        style ("Mayer Soul", "Mayer 灵魂", 4, 4, 68, 0,
+               pattern (16, { { "H", "x...x...x...x..." }, { "K", "X.....X...X....." }, { "S", "....X.......X..." } }),
+               pattern (16, { { "H", "x.x.x.x.x.x.x.x." }, { "O", "..x...x...x...x." },
+                              { "K", "X...X...X...X..." }, { "S", "....X.......X..." } }),
+               pattern (16, { { "H", "x.x.x.x........." }, { "K", "X..............." },
+                              { "S", "....X...XxXx...." }, { "T1", "..........Xx...." },
+                              { "T2", "............Xx.." }, { "T3", "..............XX" } }),
+               pattern (16, { { "H", "x...x...x...x..." }, { "K", "X.....X...X...x." }, { "S", "....X..g....X..g" } }),
+               pattern (16, { { "H", "x.x.x.x.x.x.x.x." }, { "O", "..x...x...x...x." },
+                              { "K", "X...X...X.X.X..." }, { "S", "....X.......X..g" } })),
+
+        // Medium blues shuffle for the trio material: crisp backbeat, kick
+        // answers the vocal, no crash-riding.
+        style ("Mayer Shuffle", "Mayer 蓝调 Shuffle", 4, 3, 104, 0,
+               pattern (12, { { "H", "X.xX.xX.xX.x" }, { "K", "X.....X....." }, { "S", "...X.....X.." } }),
+               pattern (12, { { "D", "X.xX.xX.xX.x" }, { "K", "X..X..X..X.." }, { "S", "...X.....X.." } }),
+               pattern (12, { { "D", "X.x........." }, { "K", "X..........." }, { "S", "...X..XxxXxx" },
+                              { "T1", "......XX...." }, { "T2", "........XX.." }, { "T3", "..........XX" } }),
+               pattern (12, { { "D", "X.xX.xX.xX.x" }, { "K", "X..X..X....." }, { "S", "...X..g..X.." } }),
+               pattern (12, { { "D", "X.xX.xX.xX.x" }, { "K", "X...X..X.X.." }, { "S", "...X..g..X.." } })),
+
+        // Texas shuffle: the same triplet feel but with a busier kick and
+        // snare chatter, for SRV-style shuffles.
+        style ("Texas Shuffle", "德州 Shuffle", 4, 3, 120, 0,
+               pattern (12, { { "H", "X.xX.xX.xX.x" }, { "K", "X...X..X.X.." }, { "S", "...X.....X.." } }),
+               pattern (12, { { "D", "X.xX.xX.xX.x" }, { "K", "X...X..X.X.." }, { "S", "...X..g..X.." } }),
+               pattern (12, { { "H", "X.x........." }, { "K", "X..........." }, { "S", "...X..XxxXxx" },
+                              { "T1", "......XX...." }, { "T2", "........XX.." }, { "T3", "..........XX" } }),
+               pattern (12, { { "D", "X.xX.xX.xX.x" }, { "K", "X..X..X.X..." }, { "S", "...X.....X.." } }),
+               pattern (12, { { "D", "X.xX.xX.xX.x" }, { "K", "X..X.X..X.X." }, { "S", "...X.g...X.." } })),
+
+        // Straight-eighth blues-rock groove, lightly swung.
+        style ("Blues Rock", "蓝调摇滚", 4, 4, 100, 0.15f,
+               pattern (16, { { "H", "x.x.x.x.x.x.x.x." }, { "K", "X.....X.X......." }, { "S", "....X.......X..." } }),
+               pattern (16, { { "D", "X.x.X.x.X.x.X.x." }, { "K", "X.....X.X.X....." }, { "S", "....X.......X..." } }),
+               pattern (16, { { "H", "x.x.x.x........." }, { "K", "X.....X........." }, { "S", "....X...XxXx...." },
+                              { "T1", "..........Xx...." }, { "T2", "............Xx.." }, { "T3", "..............XX" } }),
+               pattern (16, { { "H", "x.x.x.x.x.x.x.x." }, { "K", "X.....X.X.....x." }, { "S", "....X.......X..g" } }),
+               pattern (16, { { "D", "X.x.X.x.X.x.X.x." }, { "K", "X...X...X.X.X..." }, { "S", "....X.......X..g" } })),
+            };
+
+            // The editable "Custom" style starts as a copy of Mayer Soul.
+            DrumStyle custom = v[(size_t) 13];
+            custom.name = TR ("Custom", "自定义");
+            custom.defaultBpm = 80.0f;
+            custom.defaultSwing = 0.0f;
+            v.push_back (custom);
+            return v;
+        }();
+        return styles;
+    }
+}
+
+const std::vector<DrumStyle>& getDrumStyles()
+{
+    return drumStyleStorage();
+}
+
+DrumStyle& getCustomDrumStyle()
+{
+    return drumStyleStorage().back();
+}
+
+int getCustomDrumStyleIndex()
+{
+    return (int) drumStyleStorage().size() - 1;
 }
 
 // =============================================================================

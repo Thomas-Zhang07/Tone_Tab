@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<Chain displayName="Classic Rock - Hot Rod Plexi">
+  <Slot kind="builtin" id="gate">
+    <Params threshold="-60" release="80" attack="1"/>
+  </Slot>
+  <Slot kind="nam" path="@app/assets/nam/community/Tim R Splawn Pro Mod 3rd Gear - G12.nam">
+    <Params output="3" bass="0" mid="0.5" treble="0"/>
+  </Slot>
+  <Slot kind="builtin" id="cab">
+    <Params type="2" lowcut="75" bright="0.6" resonance="3.5" mic="0.35" level="0"/>
+  </Slot>
+  <Slot kind="builtin" id="delay">
+    <Params time="380" feedback="0.28" mix="0.14" tone="4000" type="1" mod="0.1"/>
+  </Slot>
+  <Slot kind="builtin" id="reverb">
+    <Params type="0" size="0.4" damping="0.55" predelay="12" mix="0.12"/>
+  </Slot>
+</Chain>

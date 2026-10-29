@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<Chain displayName="Classic Rock - JCM800">
+  <Slot kind="builtin" id="gate">
+    <Params threshold="-60" release="80" attack="1"/>
+  </Slot>
+  <Slot kind="nam" path="@app/assets/nam/tone3000_a2/11_marshall-jcm800.nam">
+    <Params output="0"/>
+  </Slot>
+  <Slot kind="builtin" id="reverb">
+    <Params type="0" size="0.35" damping="0.6" predelay="10" mix="0.1"/>
+  </Slot>
+</Chain>
