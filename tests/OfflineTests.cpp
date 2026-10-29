@@ -14,7 +14,10 @@
 #include "ui/TabSearch.h"
 #include "ui/StatsView.h"
 #include "ui/PresetBar.h"
+#include "ui/LoopPanel.h"
+#include "ui/RecordingPanel.h"
 #include "ui/EffectStyle.h"
+#include "app/AppPaths.h"
 #include "song/Song.h"
 #include "practice/PluckSynth.h"
 #include "practice/Judge.h"
@@ -538,6 +541,226 @@ int runOfflineTests (int argc, char* argv[])
         return probePresets (juce::File (argv[2]));
     if (argc > 2 && juce::String (argv[1]) == "--judge-snap")
         return renderJudgeSnapshots (juce::File (argv[2]));
+    if (argc > 2 && juce::String (argv[1]) == "--record-ui")
+    {
+        auto outDir = juce::File (argv[2]);
+        outDir.createDirectory();
+        auto root = outDir.getChildFile ("record-ui");
+        root.deleteRecursively();
+        root.createDirectory();
+        AppPaths::setRecordingsRoot (root);
+
+        auto takeFolder = root.getChildFile ("2026-10-29 20-00-00 Loop idea");
+        takeFolder.createDirectory();
+
+        auto phrase = [] (double secs)
+        {
+            std::vector<float> v ((size_t) (secs * sr), 0.0f);
+            const double notes[] = { 82.41, 110.0, 146.83, 196.0, 246.94, 196.0, 146.83, 110.0 };
+            const double step = 0.28;
+            for (size_t i = 0; i < v.size(); ++i)
+            {
+                const double t = (double) i / sr;
+                const auto k = (size_t) ((int) (t / step));
+                const double tn = t - (double) k * step;
+                const double f = notes[k % 8];
+                double s = 0.0;
+                for (int h = 1; h <= 6; ++h)
+                    s += std::sin (juce::MathConstants<double>::twoPi * f * h * tn) / (h * h * 0.7 + 0.3);
+                v[i] = (float) (0.10 * s * std::exp (-tn * 5.0));
+            }
+            return v;
+        };
+
+        const auto audio = phrase (6.0);
+        auto dry = takeFolder.getChildFile ("dry.wav");
+        auto mix = takeFolder.getChildFile ("mix.wav");
+        writeWav (dry, audio, audio);
+        writeWav (mix, audio, audio);
+
+        Recorder::Info info;
+        info.lengthSeconds = 6.0;
+        info.sampleRate = sr;
+        info.created = juce::Time::getCurrentTime();
+        info.mixFile = mix;
+        info.dryFile = dry;
+
+        // A punch clip so the snapshot shows the non-destructive overlay.
+        auto clipsDir = takeFolder.getChildFile ("clips");
+        clipsDir.createDirectory();
+        auto punchDemo = clipsDir.getChildFile ("punch-demo.wav");
+        std::vector<float> punchAudio ((size_t) (1.0 * sr));
+        for (size_t i = 0; i < punchAudio.size(); ++i)
+            punchAudio[i] = 0.18f * (float) std::sin (juce::MathConstants<double>::twoPi
+                                                       * 660.0 * (double) i / sr);
+        writeWav (punchDemo, punchAudio, punchAudio);
+
+        Recorder::PunchClip demoPunch;
+        demoPunch.file = punchDemo;
+        demoPunch.relativePath = "clips/punch-demo.wav";
+        demoPunch.startSeconds = 2.0;
+        demoPunch.endSeconds = 3.0;
+        demoPunch.sampleRate = sr;
+        info.punches.push_back (demoPunch);
+
+        takeFolder.getChildFile ("take.json")
+            .replaceWithText (juce::JSON::toString (info.toVar()));
+
+        juce::PropertiesFile::Options o;
+        o.applicationName = "Tone_TabRecordUI";
+        o.folderName = "Tone_TabRecordUI";
+        juce::PropertiesFile props (outDir.getChildFile ("record-ui.settings"), o);
+
+        AudioEngine engine;
+        engine.prepareForOffline (sr, block);
+        engine.setOutputGainDb (0.0f);
+
+        EffectChain chain (engine);
+        RecordingPanel panel (engine, chain, props);
+        panel.setSize (1208, 722);
+        panel.setVisible (true);
+
+        // Let the background waveform scan and the message thread timers run.
+        for (int i = 0; i < 120; ++i)
+        {
+            juce::Thread::sleep (10);
+            juce::detail::dispatchNextMessageOnSystemQueue (true);
+        }
+
+        panel.getTimeline().setSelection (1.0, 4.0);
+
+        juce::String error;
+        engine.getRecorder().startPlayback (mix, error, nullptr, 1.5);
+        std::vector<float> in ((size_t) (0.5 * sr), 0.0f), l (in.size()), r (in.size());
+        engine.processOffline (in.data(), l.data(), r.data(), (int) in.size());
+        for (int i = 0; i < 8; ++i)
+        {
+            juce::Thread::sleep (10);
+            juce::detail::dispatchNextMessageOnSystemQueue (true);
+        }
+
+        auto img = panel.createComponentSnapshot (panel.getLocalBounds(), true, 1.0f);
+        juce::PNGImageFormat png;
+        auto f = outDir.getChildFile ("record_timeline.png");
+        f.deleteFile();
+        if (auto os = f.createOutputStream())
+            png.writeImageToStream (img, *os);
+
+        engine.getRecorder().stopPlayback();
+
+        // Real-time recording lane.
+        Recorder::Info recInfo;
+        recInfo.songTitle = "Live take";
+        recInfo.sampleRate = sr;
+        recInfo.created = juce::Time::getCurrentTime();
+
+        juce::String recError;
+        if (engine.getRecorder().startRecording (recInfo, recError))
+        {
+            std::vector<float> liveIn ((size_t) (2.0 * sr), 0.0f);
+            const double notes[] = { 82.41, 110.0, 146.83, 196.0, 246.94, 196.0 };
+            const double step = 0.3;
+            for (size_t i = 0; i < liveIn.size(); ++i)
+            {
+                const double t = (double) i / sr;
+                const auto k = (size_t) ((int) (t / step));
+                const double tn = t - (double) k * step;
+                const double freq = notes[k % 6];
+                double v = 0.0;
+                for (int h = 1; h <= 6; ++h)
+                    v += std::sin (juce::MathConstants<double>::twoPi * freq * h * tn) / (h * h * 0.7 + 0.3);
+                liveIn[i] = (float) (0.1 * v * std::exp (-tn * 5.0));
+            }
+
+            std::vector<float> liveL (liveIn.size()), liveR (liveIn.size());
+            engine.processOffline (liveIn.data(), liveL.data(), liveR.data(), (int) liveIn.size());
+
+            for (int i = 0; i < 40; ++i)
+            {
+                juce::Thread::sleep (10);
+                juce::detail::dispatchNextMessageOnSystemQueue (true);
+            }
+
+            auto liveImg = panel.createComponentSnapshot (panel.getLocalBounds(), true, 1.0f);
+            auto liveFile = outDir.getChildFile ("record_live.png");
+            liveFile.deleteFile();
+            if (auto os = liveFile.createOutputStream())
+                juce::PNGImageFormat().writeImageToStream (liveImg, *os);
+
+            engine.getRecorder().stopRecording();
+        }
+
+        return 0;
+    }
+    if (argc > 2 && juce::String (argv[1]) == "--loop-ui")
+    {
+        auto outDir = juce::File (argv[2]);
+        outDir.createDirectory();
+
+        AudioEngine engine;
+        engine.prepareForOffline (sr, block);
+        engine.setOutputGainDb (0.0f);
+        auto& lp = engine.getLooper();
+        lp.setQuantise (LoopQuantise::bar);
+        lp.setFixedLengthBars (0);
+        lp.setLevelDb (-3.0f);
+        engine.getDrums().setBpm (100.0f);
+
+        // A plucked phrase so the waveform has visible shape.
+        auto phrase = [] (double secs)
+        {
+            std::vector<float> v ((size_t) (secs * sr), 0.0f);
+            const double notes[] = { 82.41, 110.0, 146.83, 196.0, 246.94, 196.0, 146.83, 110.0 };
+            const double step = 0.3;
+            for (size_t i = 0; i < v.size(); ++i)
+            {
+                const double t = (double) i / sr;
+                const auto k = (size_t) ((int) (t / step));
+                const double tn = t - (double) k * step;
+                const double f = notes[k % 8];
+                double s = 0.0;
+                for (int h = 1; h <= 6; ++h)
+                    s += std::sin (juce::MathConstants<double>::twoPi * f * h * tn)
+                         / (h * h * 0.7 + 0.3);
+                v[i] = (float) (0.10 * s * std::exp (-tn * 5.0));
+            }
+            return v;
+        };
+        auto runAudio = [&] (const std::vector<float>& in)
+        {
+            std::vector<float> l (in.size()), r (in.size());
+            engine.processOffline (in.data(), l.data(), r.data(), (int) in.size());
+        };
+
+        lp.toggle();
+        runAudio (phrase (4.0));   // 1.7 bars at 100 BPM, still recording
+
+        juce::PropertiesFile::Options o;
+        o.applicationName = "Tone_TabLoopUI";
+        o.folderName = "Tone_TabLoopUI";
+        juce::PropertiesFile props (outDir.getChildFile ("loop-ui.settings"), o);
+
+        LoopPanel panel (lp, engine.getDrums(), props);
+        panel.setSize (1208, 722);   // the practice-area size at the default window size
+
+        auto snap = [&] (const juce::String& name)
+        {
+            auto img = panel.createComponentSnapshot (panel.getLocalBounds(), true, 1.0f);
+            juce::PNGImageFormat png;
+            auto f = outDir.getChildFile (name);
+            f.deleteFile();
+            if (auto os = f.createOutputStream())
+                png.writeImageToStream (img, *os);
+        };
+
+        snap ("loop_recording.png");
+
+        lp.toggle();               // close early: rounds up to two bars
+        runAudio (std::vector<float> ((size_t) (1.2 * sr), 0.0f));
+        panel.refresh();
+        snap ("loop_station.png");
+        return 0;
+    }
     if (argc > 2 && juce::String (argv[1]) == "--gervana-ui")
     {
         // 效果器板上的 Gervana 卡片（看配色和图片预留位）
@@ -1848,6 +2071,361 @@ int runOfflineTests (int argc, char* argv[])
             check (oneSolo > -60.0f && oneSolo < all, juce::String::fromUTF8 ("只留一条音轨时声音变小：") + juce::String (oneSolo, 1) + " dB");
             check (JudgeSession (song, -1).events.empty(), juce::String::fromUTF8 ("合奏模式不判定"));
         }
+    }
+
+    // ---------------------------------------------------------------------
+    std::printf ("\n== 16. 循环站：量化录音 / 叠加 / 跟鼓机同步\n");
+    {
+        auto silence = [] (double secs)
+        {
+            return std::vector<float> ((size_t) (secs * sr), 0.0f);
+        };
+        auto tone = [] (double secs, double freq, float amp)
+        {
+            std::vector<float> v ((size_t) (secs * sr));
+            for (size_t i = 0; i < v.size(); ++i)
+                v[i] = amp * (float) std::sin (juce::MathConstants<double>::twoPi * freq * (double) i / sr);
+            return v;
+        };
+        auto process = [] (AudioEngine& e, const std::vector<float>& in,
+                           std::vector<float>& l, std::vector<float>& r)
+        {
+            l.assign (in.size(), 0.0f);
+            r.assign (in.size(), 0.0f);
+            e.processOffline (in.data(), l.data(), r.data(), (int) in.size());
+        };
+        auto rmsOf = [] (const std::vector<float>& v, size_t from, size_t to)
+        {
+            double s = 0.0;
+            for (size_t i = from; i < to && i < v.size(); ++i) s += (double) v[i] * v[i];
+            return (float) std::sqrt (s / (double) juce::jmax<size_t> (1, to - from));
+        };
+
+        // 16a. Fixed two-bar take auto-closes and repeats exactly.
+        {
+            AudioEngine e;
+            e.prepareForOffline (sr, block);
+            e.setOutputGainDb (0.0f);
+            auto& lp = e.getLooper();
+            lp.setQuantise (LoopQuantise::bar);
+            lp.setFixedLengthBars (2);
+            lp.setLevelDb (0.0f);
+            e.getDrums().setBpm (120.0f);
+
+            lp.toggle();
+            std::vector<float> l, r;
+            process (e, tone (4.0, 220.0, 0.25f), l, r);
+
+            check (lp.getState() == Looper::State::playing,
+                   T ("固定 2 小节：录完自动开始循环"));
+            check (std::abs (lp.getLengthSeconds() - 4.0) < 0.002,
+                   T ("循环长度 ") + juce::String (lp.getLengthSeconds(), 3) + T (" 秒（期望 4.000）"));
+            check (lp.getLayerCount() == 1 && std::abs (lp.getLoopBars() - 2.0) < 0.01,
+                   T ("1 层，2 小节"));
+
+            std::vector<float> pl, pr;
+            process (e, silence (8.0), pl, pr);
+            const size_t loopSamples = (size_t) (4.0 * sr);
+            const size_t start = (size_t) (0.5 * sr), len = (size_t) (3.0 * sr);
+            double worst = 0.0;
+            for (size_t i = 0; i < len; ++i)
+                worst = juce::jmax (worst, (double) std::abs (pl[start + i] - pl[start + loopSamples + i]));
+            const float level = rmsOf (pl, start, start + len);
+            check (level > 0.1f, T ("循环有声音，RMS ") + juce::String (level, 3));
+            check (worst < 1.0e-4, T ("两遍循环样本一致，最大差 ") + juce::String (worst, 6));
+        }
+
+        // 16b. An early closing press keeps recording to the bar, so the loop
+        // is exactly two bars instead of 1.6.
+        {
+            AudioEngine e;
+            e.prepareForOffline (sr, block);
+            e.setOutputGainDb (0.0f);
+            auto& lp = e.getLooper();
+            lp.setQuantise (LoopQuantise::bar);
+            lp.setFixedLengthBars (0);
+            e.getDrums().setBpm (120.0f);
+
+            lp.toggle();
+            std::vector<float> l, r;
+            process (e, tone (3.2, 220.0, 0.2f), l, r);
+            check (lp.getState() == Looper::State::recording, T ("1.6 小节时仍在录音"));
+
+            lp.toggle();                                  // early: nearest bar is 2
+            process (e, silence (1.0), l, r);
+            check (lp.getState() == Looper::State::playing, T ("按早：补录到 2 小节后开始循环"));
+            check (std::abs (lp.getLengthSeconds() - 4.0) < 0.002,
+                   T ("按早的循环长度 ") + juce::String (lp.getLengthSeconds(), 3) + T (" 秒（期望 4.000）"));
+        }
+
+        // 16c. A late closing press trims back to the nearest bar.
+        {
+            AudioEngine e;
+            e.prepareForOffline (sr, block);
+            e.setOutputGainDb (0.0f);
+            auto& lp = e.getLooper();
+            lp.setQuantise (LoopQuantise::bar);
+            lp.setFixedLengthBars (0);
+            e.getDrums().setBpm (120.0f);
+
+            lp.toggle();
+            std::vector<float> l, r;
+            process (e, tone (4.6, 220.0, 0.2f), l, r);
+            lp.toggle();                                  // late: nearest bar is 2
+            process (e, silence (0.2), l, r);
+            check (lp.getState() == Looper::State::playing, T ("按晚：立即按最近小节收尾"));
+            check (std::abs (lp.getLengthSeconds() - 4.0) < 0.002,
+                   T ("按晚的循环长度 ") + juce::String (lp.getLengthSeconds(), 3) + T (" 秒（期望 4.000）"));
+        }
+
+        // 16d. Overdub adds a second layer without changing the loop length.
+        {
+            AudioEngine e;
+            e.prepareForOffline (sr, block);
+            e.setOutputGainDb (0.0f);
+            auto& lp = e.getLooper();
+            lp.setQuantise (LoopQuantise::bar);
+            lp.setFixedLengthBars (2);
+            lp.setLevelDb (0.0f);
+            e.getDrums().setBpm (120.0f);
+
+            lp.toggle();
+            std::vector<float> l, r;
+            process (e, tone (4.0, 220.0, 0.25), l, r);
+            process (e, silence (4.0), l, r);
+            const float before = rmsOf (l, (size_t) (0.5 * sr), (size_t) (3.5 * sr));
+
+            lp.toggle();                                  // arm overdub
+            process (e, tone (8.0, 330.0, 0.15f), l, r);  // next loop pass overdubs
+            check (lp.getLayerCount() == 2 && lp.getState() == Looper::State::overdubbing,
+                   T ("叠加进行中，2 层"));
+            lp.toggle();                                  // finish
+            process (e, silence (0.05), l, r);
+            check (lp.getLayerCount() == 2 && lp.getState() == Looper::State::playing,
+                   T ("叠加结束，仍在播放"));
+
+            process (e, silence (4.0), l, r);
+            const float after = rmsOf (l, (size_t) (0.5 * sr), (size_t) (3.5 * sr));
+            check (std::abs (lp.getLengthSeconds() - 4.0) < 0.002,
+                   T ("叠加不改变循环长度"));
+            check (after > before * 1.1f,
+                   T ("叠加后音量变大：") + juce::String (before, 3) + T (" → ") + juce::String (after, 3));
+        }
+
+        // 16e. With drums playing, recording starts on the next drum bar, not
+        // on the key press.
+        {
+            AudioEngine e;
+            e.prepareForOffline (sr, block);
+            e.setOutputGainDb (0.0f);
+            auto& d = e.getDrums();
+            int clickOnly = 0;
+            const auto& styles = getDrumStyles();
+            for (int i = 0; i < (int) styles.size(); ++i)
+                if (styles[(size_t) i].clickOnly) clickOnly = i;
+            d.setStyle (clickOnly);
+            d.setBpm (120.0f);
+            d.setCountIn (false);
+            d.setVolumeDb (-60.0f);
+            d.setPlaying (true);
+
+            auto& lp = e.getLooper();
+            lp.setQuantise (LoopQuantise::bar);
+            lp.setFixedLengthBars (0);
+
+            std::vector<float> l, r;
+            process (e, silence (0.35), l, r);            // 0.7 beats into the bar
+            lp.toggle();
+
+            int64_t waited = 0;
+            bool started = false;
+            std::vector<float> s ((size_t) block, 0.0f), bl ((size_t) block), br ((size_t) block);
+            for (int i = 0; i < (int) (3.0 * sr / block); ++i)
+            {
+                e.processOffline (s.data(), bl.data(), br.data(), block);
+                waited += block;
+                if (lp.getState() == Looper::State::recording) { started = true; break; }
+            }
+
+            const double expected = 2.0 - 0.35;           // next bar at 2 s
+            const double actual = (double) waited / sr;
+            check (started && std::abs (actual - expected) < 0.01,
+                   T ("开鼓机时等待 ") + juce::String (actual, 3) + T (" 秒到下一小节（期望 ")
+                       + juce::String (expected, 3) + T ("）"));
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    std::printf ("\n== 17. 录音回放定位（点时间线从该处播放）\n");
+    {
+        auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                       .getChildFile ("tone_tab_recseek").getNonexistentSibling();
+        dir.createDirectory();
+        auto wav = dir.getChildFile ("take.wav");
+
+        std::vector<float> audio ((size_t) (2.0 * sr), 0.0f);
+        for (size_t i = 0; i < audio.size(); ++i)
+            audio[i] = 0.2f * (float) std::sin (juce::MathConstants<double>::twoPi * 220.0 * (double) i / sr);
+        writeWav (wav, audio, audio);
+
+        AudioEngine e;
+        e.prepareForOffline (sr, block);
+        e.setOutputGainDb (0.0f);
+        auto& rec = e.getRecorder();
+
+        juce::String err;
+        check (rec.startPlayback (wav, err, nullptr, 1.0), T ("从 1.0 秒开始回放：") + err);
+
+        std::vector<float> in ((size_t) (0.1 * sr), 0.0f), l (in.size()), r (in.size());
+        e.processOffline (in.data(), l.data(), r.data(), (int) in.size());
+        check (std::abs (rec.getPlaybackSeconds() - 1.1) < 0.01,
+               T ("0.1 秒后位置 ") + juce::String (rec.getPlaybackSeconds(), 3) + T (" 秒（期望 1.1）"));
+
+        rec.setPlaybackPosition (0.25);
+        std::vector<float> in2 ((size_t) (0.05 * sr), 0.0f), l2 (in2.size()), r2 (in2.size());
+        e.processOffline (in2.data(), l2.data(), r2.data(), (int) in2.size());
+        check (std::abs (rec.getPlaybackSeconds() - 0.30) < 0.01,
+               T ("跳到 0.25 秒再放 0.05 秒：位置 ") + juce::String (rec.getPlaybackSeconds(), 3)
+                   + T (" 秒（期望 0.30）"));
+        check (rec.isPlayingBack(), T ("定位后仍在回放"));
+
+        rec.stopPlayback();
+        dir.deleteRecursively();
+    }
+
+    // ---------------------------------------------------------------------
+    std::printf ("\n== 18. 非破坏性补录（Punch over selection）\n");
+    {
+        auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                       .getChildFile ("tone_tab_punch").getNonexistentSibling();
+        dir.createDirectory();
+        auto take = dir.getChildFile ("Take");
+        take.createDirectory();
+        auto dry = take.getChildFile ("dry.wav");
+        auto mix = take.getChildFile ("mix.wav");
+
+        std::vector<float> base ((size_t) (2.0 * sr)), live ((size_t) (1.4 * sr));
+        for (size_t i = 0; i < base.size(); ++i)
+            base[i] = 0.2f * (float) std::sin (juce::MathConstants<double>::twoPi * 440.0 * (double) i / sr);
+        for (size_t i = 0; i < live.size(); ++i)
+            live[i] = 0.2f * (float) std::sin (juce::MathConstants<double>::twoPi * 880.0 * (double) i / sr);
+
+        writeWav (dry, base, base);
+        writeWav (mix, base, base);
+        const auto drySizeBefore = dry.getSize();
+
+        Recorder::Info info;
+        info.lengthSeconds = 2.0;
+        info.sampleRate = sr;
+        info.created = juce::Time::getCurrentTime();
+        info.mixFile = mix;
+        info.dryFile = dry;
+        take.getChildFile ("take.json").replaceWithText (juce::JSON::toString (info.toVar()));
+
+        AudioEngine e;
+        e.prepareForOffline (sr, block);
+        e.setOutputGainDb (0.0f);
+        auto& rec = e.getRecorder();
+
+        juce::String err;
+        check (rec.startPunchRecording (mix, 0.5, 1.0, err), T ("开始补录 0.5–1.0 秒：") + err);
+
+        std::vector<float> outL (live.size()), outR (live.size());
+        e.processOffline (live.data(), outL.data(), outR.data(), (int) live.size());
+
+        check (rec.hasPunchFinished(), T ("补录在选区结束处自动停止"));
+        const double recorded = rec.getPunchRecordedSeconds();
+        check (std::abs (recorded - 0.5) < 0.01,
+               T ("补录长度 ") + juce::String (recorded, 3) + T (" 秒（期望 0.5）"));
+        const auto clip = rec.finishPunchRecording();
+        check (clip.existsAsFile(), T ("补录片段已写入：") + clip.getFileName());
+        check (dry.getSize() == drySizeBefore, T ("原始 dry.wav 没有被改写（非破坏性）"));
+
+        // Early stop: the clip is still committed with what was recorded.
+        {
+            std::vector<float> live2 ((size_t) (1.5 * sr));
+            for (size_t i = 0; i < live2.size(); ++i)
+                live2[i] = 0.15f * (float) std::sin (juce::MathConstants<double>::twoPi * 660.0 * (double) i / sr);
+
+            juce::String e2;
+            check (rec.startPunchRecording (mix, 1.2, 1.8, e2), T ("第二次补录 1.2–1.8 秒：") + e2);
+            std::vector<float> l2 (live2.size()), r2 (live2.size());
+            e.processOffline (live2.data(), l2.data(), r2.data(), (int) live2.size());
+            rec.stopPunchRecording();
+            check (rec.hasPunchFinished(), T ("提前点“停止补录”也会提交"));
+            const auto clip2 = rec.finishPunchRecording();
+            check (clip2.existsAsFile(), T ("提前停止的补录片段已写入"));
+        }
+
+        Recorder::Info loaded;
+        double rate = 0.0;
+        auto effective = Recorder::loadEffectiveDry (mix, err, &loaded, &rate);
+        check (effective != nullptr && loaded.punches.size() == 2,
+               T ("take.json 里有 2 个补录片段"));
+        if (effective != nullptr)
+        {
+            double worst = 0.0;
+            for (int i = 0; i < effective->getNumSamples(); ++i)
+            {
+                const double t = (double) i / sr;
+                const double expected = (t >= 1.2 && t < 1.5)
+                                            ? 0.15 * std::sin (juce::MathConstants<double>::twoPi * 660.0 * t)
+                                        : (t >= 0.5 && t < 1.0)
+                                            ? 0.2 * std::sin (juce::MathConstants<double>::twoPi * 880.0 * t)
+                                            : 0.2 * std::sin (juce::MathConstants<double>::twoPi * 440.0 * t);
+                worst = juce::jmax (worst, (double) std::abs (effective->getSample (0, i) - expected));
+            }
+            check (worst < 2.0e-3,
+                   T ("选区外仍是原音、选区内是新弹的音；最大偏差 ") + juce::String (worst, 6));
+        }
+
+        dir.deleteRecursively();
+    }
+
+    // ---------------------------------------------------------------------
+    std::printf ("\n== 19. 导出：重过当前效果器链（离线渲染）\n");
+    {
+        auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                       .getChildFile ("tone_tab_export").getNonexistentSibling();
+        dir.createDirectory();
+        auto dryFile = dir.getChildFile ("dry.wav");
+
+        std::vector<float> dry ((size_t) (1.0 * sr), 0.0f);
+        for (size_t i = 0; i < dry.size(); ++i)
+            dry[i] = 0.2f * (float) std::sin (juce::MathConstants<double>::twoPi * 220.0 * (double) i / sr);
+        writeWav (dryFile, dry, dry);
+
+        AudioEngine source;
+        source.prepareForOffline (sr, block);
+        source.setOutputGainDb (0.0f);
+        EffectChain sourceChain (source);
+        sourceChain.insert (sourceChain.createBuiltin ("overdrive"));
+        auto chainXml = sourceChain.toXml();
+
+        juce::String err;
+        double rate = 0.0;
+        Recorder::Info info;
+        auto effective = Recorder::loadEffectiveDry (dryFile, err, &info, &rate);
+        check (effective != nullptr && chainXml != nullptr, T ("读取导出源和当前效果器链"));
+
+        if (effective != nullptr && chainXml != nullptr)
+        {
+            AudioEngine exporter;
+            exporter.setPracticeEnabled (false);
+            exporter.setOutputGainDb (0.0f);
+            exporter.prepareForOffline (rate, block);
+            EffectChain exportChain (exporter);
+            juce::StringArray problems;
+            exportChain.loadFromXml (*chainXml, problems);
+
+            std::vector<float> outL ((size_t) effective->getNumSamples(), 0.0f), outR (outL.size(), 0.0f);
+            exporter.processOffline (effective->getReadPointer (0), outL.data(), outR.data(), (int) outL.size());
+            const auto st = stats (outL, outL);
+            check (problems.isEmpty() && st.finite && st.peak > 0.01f && st.peak < 2.0f,
+                   T ("导出的重过效果器音频 峰值 ") + db (st.peak) + T ("  长度 ") + juce::String (rate, 0) + " Hz");
+        }
+
+        dir.deleteRecursively();
     }
 
     std::printf ("\n%s：%d 项失败\n", failures == 0 ? "全部通过" : "有失败", failures);

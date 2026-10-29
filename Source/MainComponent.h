@@ -12,6 +12,7 @@
 #include "ui/PracticePanel.h"
 #include "ui/RecordingPanel.h"
 #include "ui/StatsView.h"
+#include "ui/LoopPanel.h"
 
 class MainComponent : public juce::Component,
                       public juce::FileDragAndDropTarget,
@@ -25,11 +26,13 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
+    bool keyStateChanged (bool isKeyDown) override;
+    void focusLost (FocusChangeType) override;
 
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int x, int y) override;
 
-    enum class View { tone, practice, drums, record, stats };
+    enum class View { tone, practice, drums, record, stats, loop };
     void setView (View v);
     PracticePanel& getPracticePanel()    { return *practicePanel; }
 
@@ -69,7 +72,8 @@ private:
     std::unique_ptr<PedalEditorOverlay> pedalOverlay;
     std::unique_ptr<PracticePanel> practicePanel;
     std::unique_ptr<RecordingPanel> recordingPanel;
-    juce::TextButton toneViewButton, practiceViewButton, drumsViewButton, recordViewButton, statsViewButton;
+    std::unique_ptr<LoopPanel> loopPanel;
+    juce::TextButton toneViewButton, practiceViewButton, drumsViewButton, recordViewButton, statsViewButton, loopViewButton;
     PracticeLog practiceLog { PracticeLog::defaultFile() };
     std::unique_ptr<StatsView> statsView;
     View view = View::tone;
@@ -78,6 +82,7 @@ private:
     juce::Rectangle<int> leftPanel, fxPanel, drumPanelArea, practiceArea;
     int frameCounter = 0;
     bool chainDirty = false;
+    bool spaceHeld = false;
 
     juce::TooltipWindow tooltips { this, 600 };
 

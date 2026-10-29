@@ -86,6 +86,7 @@ void AudioEngine::prepareInternal (double sr, int block)
     outputGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputGainDb.load()));
 
     drums.prepare (sr);
+    looper.prepare (sr, block, practiceEnabled.load());
     tabPlayer.prepare (sr);
     judge.setSampleRate (sr);
     recorder.setSampleRate (sr);
@@ -263,6 +264,12 @@ void AudioEngine::processSubBlock (const float* guitarIn, float* outL, float* ou
     masterDc.processBlock (outL, n, 0);
     masterDc.processBlock (outR, n, 1);
 
+    // The loop station records the tone after the effects chain but before the
+    // guitar level / monitor control, so muting the live guitar still captures
+    // the loop and the loop keeps its own level.
+    if (practiceEnabled.load())
+        looper.capture (outL, outR, n);
+
     // 5. 吉他音量 / 监听开关
     outputGain.setTargetValue (monitoring.load() ? juce::Decibels::decibelsToGain (outputGainDb.load()) : 0.0f);
     for (int i = 0; i < n; ++i)
@@ -278,8 +285,11 @@ void AudioEngine::processSubBlock (const float* guitarIn, float* outL, float* ou
         tabPlayer.render (outL, outR, n, drums);
         drums.render (outL, outR, n);
 
-        // Full mix: guitar + effects + backing + drums. The dry stem is captured
-        // earlier, before input gain.
+        // Render after the drums so the looper sees this block's drum grid.
+        looper.render (outL, outR, n, drums);
+
+        // Full mix: guitar + effects + backing + drums + loop. The dry stem is
+        // captured earlier, before input gain.
         recorder.captureMix (outL, outR, n);
 
         // Judging: dry signal (post input gain, pre effects) + the tab position.

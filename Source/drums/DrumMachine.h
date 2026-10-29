@@ -95,7 +95,13 @@ public:
     // ---- message thread -----------------------------------------------------
     void setPlaying (bool shouldPlay);
     bool isPlaying() const              { return playing.load(); }
-    void setStyle (int index)           { styleIndex.store (index); }
+    void setStyle (int index)
+    {
+        styleIndex.store (index);
+        const auto& styles = getDrumStyles();
+        if (juce::isPositiveAndBelow (index, (int) styles.size()))
+            gridBeatsPerBar.store (styles[(size_t) index].beatsPerBar);
+    }
     int  getStyle() const               { return styleIndex.load(); }
     void setChorus (bool c)             { chorusSection.store (c); }
     bool isChorus() const               { return chorusSection.load(); }
@@ -127,6 +133,12 @@ public:
                    ? pieceGain[(size_t) inst].load() : 1.0f;
     }
 
+    // Musical grid (used by the loop station). The phase is the position at the
+    // start of the current render block; the loop station reads it after
+    // DrumMachine::render, in the same audio callback.
+    double getGridBeatsAtBlockStart() const { return gridBeatsAtBlockStart.load (std::memory_order_relaxed); }
+    int    getGridBeatsPerBar() const       { return gridBeatsPerBar.load (std::memory_order_relaxed); }
+
     // UI state.
     int getCurrentBeat() const          { return currentBeat.load(); }
     int getCurrentStep() const          { return currentStep.load(); }
@@ -149,6 +161,8 @@ private:
     std::atomic<float> bpm { 100.0f }, swing { 0.0f }, volumeDb { -6.0f }, humanize { 0.0f };
     std::atomic<int> currentBeat { -1 }, currentStep { -1 };
     std::atomic<bool> inCountIn { false }, inFill { false };
+    std::atomic<double> gridBeatsAtBlockStart { 0.0 };
+    std::atomic<int> gridBeatsPerBar { 4 };
     std::array<std::atomic<float>, numDrumInstruments> pieceGain;
 
     double sampleRate = 48000.0;
@@ -161,4 +175,5 @@ private:
     int activeStyle = 0, step = 0, bar = 0, countInBeatsLeft = 0;
     bool barIsFill = false, crashNext = false;
     double samplesToNextStep = 0.0;
+    int64_t gridSampleCounter = 0;
 };

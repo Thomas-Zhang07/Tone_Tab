@@ -6,6 +6,7 @@
 #include "fx/EffectChain.h"
 #include "dsp/DcBlocker.h"
 #include "drums/DrumMachine.h"
+#include "looper/Looper.h"
 #include "practice/TabPlayer.h"
 #include "practice/Judge.h"
 #include "practice/Recorder.h"
@@ -33,6 +34,7 @@ public:
     int  getGuitarChannel() const         { return guitarDeviceChannel.load(); }
 
     DrumMachine& getDrums()               { return drums; }
+    Looper& getLooper()                   { return looper; }
     TabPlayer& getTabPlayer()             { return tabPlayer; }
     Judge& getJudge()                     { return judge; }
     Recorder& getRecorder()               { return recorder; }
@@ -112,6 +114,7 @@ private:
     std::array<ChainSnapshot*, garbageSize> garbage {};
 
     DrumMachine drums;
+    Looper looper;
     TabPlayer tabPlayer;
     Judge judge { tabPlayer };
     Recorder recorder { tabPlayer };

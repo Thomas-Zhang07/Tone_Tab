@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # Statically link the MSVC runtime so a packaged build runs without the VC++ redistributable.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-project(Tone_Tab VERSION 0.4.0 LANGUAGES C CXX)
+project(Tone_Tab VERSION 0.5.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -65,6 +65,7 @@ set(TONE_CORE_SOURCES
     Source/fx/NamProcessor.cpp
     Source/fx/EffectChain.cpp
     Source/drums/DrumMachine.cpp
+    Source/looper/Looper.cpp
     Source/song/SongBuilder.cpp
     Source/song/GpImporter.cpp
     Source/practice/TabPlayer.cpp
@@ -100,9 +101,11 @@ set(TONE_UI_SOURCES
     Source/ui/PedalEditor.cpp
     Source/ui/NamBrowser.cpp
     Source/ui/DrumPanel.cpp
+    Source/ui/LoopPanel.cpp
     Source/ui/TabHighway.cpp
     Source/ui/PracticePanel.cpp
     Source/ui/RecordingPanel.cpp
+    Source/ui/TakeTimeline.cpp
     Source/ui/TabSearch.cpp
     Source/ui/StatsView.cpp)
 
@@ -132,6 +135,8 @@ target_compile_definitions(Tone_Tab PRIVATE
     JUCE_DIRECTSOUND=1)
 if(MSVC)
     target_compile_options(Tone_Tab PRIVATE /utf-8 /bigobj)
+    # The embedded offline test runner is one very large function; give it room.
+    target_link_options(Tone_Tab PRIVATE /STACK:33554432)
 endif()
 target_link_libraries(Tone_Tab
     PRIVATE ToneUI ToneCore nam_core
@@ -150,6 +155,7 @@ if(TONE_BUILD_TESTS)
         JUCE_USE_XCURSOR=0 JUCE_USE_XINPUT=0)
     if(MSVC)
         target_compile_options(ToneTests PRIVATE /utf-8 /bigobj)
+        target_link_options(ToneTests PRIVATE /STACK:33554432)
     endif()
     target_link_libraries(ToneTests
         PRIVATE ToneUI ToneCore nam_core

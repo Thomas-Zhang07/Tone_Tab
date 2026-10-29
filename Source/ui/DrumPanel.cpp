@@ -669,6 +669,12 @@ void DrumPanel::saveCustomDrums()
 
 void DrumPanel::timerCallback()
 {
+    // The Loop page shares this tempo; keep the slider in step when it is
+    // changed from there.
+    if (! bpmSlider.isMouseButtonDown()
+        && std::abs (bpmSlider.getValue() - (double) drums.getBpm()) > 0.01)
+        bpmSlider.setValue ((double) drums.getBpm(), juce::dontSendNotification);
+
     updatePlayButton();
     repaint (patternArea);
 
@@ -726,7 +732,7 @@ void DrumPanel::save()
 {
     settings.setValue ("drumStyle", selectedStyle);
     settings.setValue ("drumChorus", drums.isChorus());
-    settings.setValue ("drumBpm", bpmSlider.getValue());
+    settings.setValue ("drumBpm", (double) drums.getBpm());
     settings.setValue ("drumSwing", swingSlider.getValue());
     settings.setValue ("drumHumanize", humanizeSlider.getValue());
     settings.setValue ("drumVolume", volumeSlider.getValue());

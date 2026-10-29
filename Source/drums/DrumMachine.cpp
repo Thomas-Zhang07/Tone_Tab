@@ -555,7 +555,10 @@ void DrumMachine::startStep() noexcept
     {
         const int wanted = juce::jlimit (0, (int) styles.size() - 1, styleIndex.load());
         if (wanted != activeStyle && countInBeatsLeft == 0)
+        {
             activeStyle = wanted;
+            gridBeatsPerBar.store (styles[(size_t) activeStyle].beatsPerBar);
+        }
 
         const int fe = fillEvery.load();
         const bool requested = fillRequested.exchange (false);
@@ -639,6 +642,8 @@ void DrumMachine::render (float* left, float* right, int numSamples) noexcept
         crashNext = false;
         countInBeatsLeft = countIn.load() ? styles[(size_t) activeStyle].beatsPerBar : 0;
         samplesToNextStep = 0.0;
+        gridSampleCounter = 0;
+        gridBeatsPerBar.store (styles[(size_t) activeStyle].beatsPerBar);
     }
     else if (! wantPlay && running)
     {
@@ -647,6 +652,13 @@ void DrumMachine::render (float* left, float* right, int numSamples) noexcept
         currentStep.store (-1);
         inCountIn.store (false);
         inFill.store (false);
+    }
+
+    // Publish the musical position at the start of this block. The loop station
+    // renders after us in the same callback and snaps its actions to this grid.
+    {
+        const double beatsPerSample = (double) bpm.load() / 60.0 / sampleRate;
+        gridBeatsAtBlockStart.store ((double) gridSampleCounter * beatsPerSample);
     }
 
     gain.setTargetValue (juce::Decibels::decibelsToGain (volumeDb.load(), -60.0f));
@@ -713,4 +725,7 @@ void DrumMachine::render (float* left, float* right, int numSamples) noexcept
             samplesToNextStep -= chunk;
         pos += chunk;
     }
+
+    if (running)
+        gridSampleCounter += numSamples;
 }
