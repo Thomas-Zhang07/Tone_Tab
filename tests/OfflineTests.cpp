@@ -474,6 +474,53 @@ static int renderJudgeSnapshots (const juce::File& outDir)
     return 0;
 }
 
+static int probePresets (const juce::File& dir)
+{
+    for (auto& f : dir.findChildFiles (juce::File::findFiles, false, "*.xml"))
+    {
+        auto xml = juce::parseXML (f);
+        if (xml == nullptr)
+        {
+            std::printf ("  [FAIL] %s (parse)\n", f.getFileName().toRawUTF8());
+            continue;
+        }
+
+        AudioEngine engine;
+        engine.prepareForOffline (sr, block);
+        engine.setOutputGainDb (0.0f);
+        EffectChain chain (engine);
+        juce::StringArray problems;
+        chain.loadFromXml (*xml, problems);
+
+        std::vector<float> silence ((size_t) (4.0 * sr), 0.0f), l, r;
+        run (engine, silence, l, r);
+        const auto noise = stats (l, r, (size_t) (0.5 * sr));
+
+        // A quiet, realistic input: -66 dBFS hiss plus a little 50 Hz hum.
+        std::vector<float> hiss ((size_t) (4.0 * sr), 0.0f);
+        juce::Random rnd (1234);
+        for (size_t i = 0; i < hiss.size(); ++i)
+            hiss[i] = 0.0005f * (rnd.nextFloat() * 2.0f - 1.0f)
+                    + 0.0008f * (float) std::sin (juce::MathConstants<double>::twoPi * 50.0 * (double) i / sr);
+        std::vector<float> hl, hr;
+        run (engine, hiss, hl, hr);
+        const auto hissOut = stats (hl, hr, (size_t) (0.5 * sr));
+
+        const auto guitar = makeGuitar (3.0);
+        std::vector<float> gl, gr;
+        run (engine, guitar, gl, gr);
+        const auto tone = stats (gl, gr, (size_t) (0.2 * sr));
+
+        std::printf ("  %-34s silence %7s | hiss RMS %7s peak %7s | guitar RMS %7s peak %7s%s\n",
+                     f.getFileNameWithoutExtension().toRawUTF8(),
+                     db (noise.rms).toRawUTF8(),
+                     db (hissOut.rms).toRawUTF8(), db (hissOut.peak).toRawUTF8(),
+                     db (tone.rms).toRawUTF8(), db (tone.peak).toRawUTF8(),
+                     problems.isEmpty() ? "" : ("  problems: " + problems.joinIntoString (", ")).toRawUTF8());
+    }
+    return 0;
+}
+
 int runOfflineTests (int argc, char* argv[])
 {
 #ifndef TONE_TESTS_EMBEDDED
@@ -487,6 +534,8 @@ int runOfflineTests (int argc, char* argv[])
         return renderHighwaySnapshots (juce::File (argv[2]), juce::File (argv[3]));
     if (argc > 2 && juce::String (argv[1]) == "--nam-probe")
         return probeNamModels (juce::File (argv[2]));
+    if (argc > 2 && juce::String (argv[1]) == "--preset-probe")
+        return probePresets (juce::File (argv[2]));
     if (argc > 2 && juce::String (argv[1]) == "--judge-snap")
         return renderJudgeSnapshots (juce::File (argv[2]));
     if (argc > 2 && juce::String (argv[1]) == "--gervana-ui")
@@ -743,6 +792,18 @@ int runOfflineTests (int argc, char* argv[])
             check (st.finite && st.peak > 0.05f && st.peak < 1.0f,
                    styles[(size_t) i].name + T ("  峰值 ") + db (st.peak) + "  RMS " + db (st.rms));
             writeWav (outDir.getChildFile ("drums_" + juce::String (i) + ".wav"), l, r);
+        }
+
+        // 6c. The editable Custom style must not use alternating B bars, so the
+        // pattern shown in the grid is what plays on every bar.
+        {
+            const auto& custom = getCustomDrumStyle();
+            bool bHits = false;
+            for (auto& instrument : custom.verseB.velocity)
+                for (float v : instrument) bHits = bHits || v > 0.0f;
+            for (auto& instrument : custom.chorusB.velocity)
+                for (float v : instrument) bHits = bHits || v > 0.0f;
+            check (! bHits, T ("自定义节奏没有 A/B 变体（格子与实际播放一致）"));
         }
     }
 

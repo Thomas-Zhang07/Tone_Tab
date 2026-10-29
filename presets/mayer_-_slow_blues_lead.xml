@@ -1,22 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <Chain displayName="Mayer - Slow Blues Lead">
-  <Slot kind="builtin" id="gate">
-    <Params threshold="-64" release="120" attack="1"/>
+  <Slot kind="builtin" id="denoise">
+    <Params threshold="-62" amount="25" release="140" hum="1"/>
   </Slot>
   <Slot kind="builtin" id="overdrive">
-    <Params model="3" drive="12" tone="0.55" level="-2" bass="0.5" blend="0"/>
+    <Params model="3" drive="8" tone="0.55" level="-1" bass="0.5" blend="0"/>
   </Slot>
-  <Slot kind="nam" path="@app/assets/nam/community/Tudor N Ceriatone Molecular 50.nam">
-    <Params output="2" bass="0.5" mid="1" treble="0.5"/>
+  <Slot kind="nam" path="@app/assets/nam/tone3000_a2/01_fender-super-reverb-1965_edge-of-breakup_cab-a2.nam">
+    <Params output="2" bass="0.5" mid="0.5" treble="0"/>
   </Slot>
-  <Slot kind="builtin" id="cab">
-    <Params type="0" lowcut="80" bright="0.55" resonance="2.5" mic="0.4" level="0"/>
+  <Slot kind="builtin" id="gate">
+    <Params threshold="-50" release="140" attack="1" ratio="10"/>
   </Slot>
   <Slot kind="builtin" id="delay">
-    <Params time="400" feedback="0.26" mix="0.14" tone="4200" type="1" mod="0.12"/>
+    <Params time="400" feedback="0.24" mix="0.13" tone="4200" type="1" mod="0.1"/>
   </Slot>
   <Slot kind="builtin" id="reverb">
-    <Params type="2" size="0.5" damping="0.45" predelay="25" mix="0.18"/>
+    <Params type="2" size="0.5" damping="0.5" predelay="25" mix="0.16"/>
   </Slot>
 </Chain>

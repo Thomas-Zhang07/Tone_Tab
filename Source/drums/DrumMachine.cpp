@@ -237,10 +237,14 @@ namespace
             };
 
             // The editable "Custom" style starts as a copy of Mayer Soul.
+            // B variations are cleared so the grid you edit is exactly what
+            // plays on every bar.
             DrumStyle custom = v[(size_t) 13];
             custom.name = TR ("Custom", "自定义");
             custom.defaultBpm = 80.0f;
             custom.defaultSwing = 0.0f;
+            custom.verseB = DrumPattern {};
+            custom.chorusB = DrumPattern {};
             v.push_back (custom);
             return v;
         }();

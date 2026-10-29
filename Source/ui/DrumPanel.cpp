@@ -108,9 +108,26 @@ DrumPanel::DrumPanel (DrumMachine& d, juce::PropertiesFile& s) : drums (d), sett
     editPartBox.addItem (TR ("Edit: Chorus", "编辑：副歌"), 2);
     editPartBox.addItem (TR ("Edit: Fill", "编辑：加花"), 3);
     editPartBox.setSelectedId (1, juce::dontSendNotification);
-    editPartBox.setTooltip (TR ("Which part of the Custom groove the step grid edits",
-                                "步进格编辑自定义节奏的哪个段落"));
-    editPartBox.onChange = [this] { updateEditUi(); save(); repaint (patternArea); };
+    editPartBox.setTooltip (TR ("Which part of the Custom groove the step grid edits "
+                                "(Verse/Chorus also switches playback; use Fill Now to hear the fill)",
+                                "步进格编辑自定义节奏的哪个段落"
+                                "（主歌/副歌会同时切换播放；加花用“手动加花”试听）"));
+    editPartBox.onChange = [this]
+    {
+        if (selectedStyle == getCustomDrumStyleIndex())
+        {
+            const int part = editPartBox.getSelectedId();
+            if (part == 1 || part == 2)
+            {
+                const bool chorus = part == 2;
+                drums.setChorus (chorus);
+                (chorus ? chorusButton : verseButton).setToggleState (true, juce::dontSendNotification);
+            }
+        }
+        updateEditUi();
+        save();
+        repaint (patternArea);
+    };
     addAndMakeVisible (editPartBox);
 
     clearPartButton.setButtonText (TR ("Clear Part", "清空"));
@@ -365,9 +382,11 @@ void DrumPanel::paintPattern (juce::Graphics& g, juce::Rectangle<int> area)
                         : (drums.isInFill() ? st.fill
                                             : (drums.isChorus() ? st.chorus : st.verse));
 
-    const DrumInstrument rows[] = { kick, snare, closedHat, openHat, crash, ride, tomHigh, tomMid, tomLow };
-    const char* names[] = { "Kick", "Snare", "Hat", "Open", "Crash", "Ride", "Tom H", "Tom M", "Tom L" };
-    const int rowCount = 9;
+    const DrumInstrument rows[] = { kick, snare, sideStick, closedHat, openHat, crash,
+                                    ride, tomHigh, tomMid, tomLow };
+    const char* names[] = { "Kick", "Snare", "Rim", "Hat", "Open", "Crash",
+                            "Ride", "Tom H", "Tom M", "Tom L" };
+    const int rowCount = 10;
     const int headerH = 22;
     const int labelW = 56;
 
@@ -449,7 +468,7 @@ bool DrumPanel::cellAt (juce::Point<int> position, int& row, int& step) const
     const auto& st = styles[(size_t) juce::jlimit (0, (int) styles.size() - 1, selectedStyle)];
     const int steps = juce::jlimit (1, 16, st.beatsPerBar * st.stepsPerBeat);
 
-    constexpr int headerH = 22, labelW = 56, rowCount = 9;
+    constexpr int headerH = 22, labelW = 56, rowCount = 10;
     const int x = position.x - patternArea.getX();
     const int y = position.y - patternArea.getY();
     if (x < labelW || y < headerH)
@@ -487,6 +506,10 @@ void DrumPanel::copySelectedStyleToCustom()
     custom = source;
     custom.name = TR ("Custom", "自定义");
     custom.clickOnly = false;
+    // One editable pattern per section: clear the alternating B bars so the
+    // grid matches what plays on every bar.
+    custom.verseB = DrumPattern {};
+    custom.chorusB = DrumPattern {};
 
     selectedStyle = customIndex;
     drums.setStyle (customIndex);
@@ -515,22 +538,20 @@ void DrumPanel::mouseDown (const juce::MouseEvent& e)
     if (p == nullptr || step >= p->steps)
         return;
 
-    static const DrumInstrument rows[] = { kick, snare, closedHat, openHat, crash,
-                                           ride, tomHigh, tomMid, tomLow };
+    static const DrumInstrument rows[] = { kick, snare, sideStick, closedHat, openHat,
+                                           crash, ride, tomHigh, tomMid, tomLow };
     auto& v = p->velocity[(size_t) rows[row]][(size_t) step];
 
-    // Left click cycles off -> normal -> accent -> ghost -> off.
-    // Right click clears the cell.
+    // Left click toggles a hit on/off; Shift sets an accent, Alt a ghost note;
+    // right click clears the cell. Every click changes the cell immediately.
     if (e.mods.isRightButtonDown())
         v = 0.0f;
-    else if (v <= 0.0f)
-        v = 0.7f;
-    else if (v > 0.9f)
-        v = 0.28f;
-    else if (v > 0.34f)
-        v = 1.0f;
+    else if (e.mods.isShiftDown())
+        v = v > 0.9f ? 0.7f : 1.0f;
+    else if (e.mods.isAltDown())
+        v = (v > 0.1f && v < 0.5f) ? 0.7f : 0.28f;
     else
-        v = 0.0f;
+        v = v > 0.0f ? 0.0f : 0.7f;
 
     save();
     repaint (patternArea);
@@ -553,7 +574,8 @@ void DrumPanel::clearEditPart()
 void DrumPanel::updateEditUi()
 {
     const bool custom = selectedStyle == getCustomDrumStyleIndex();
-    patternHeader.setText (custom ? TR ("Pattern — click cells to edit", "节奏型 — 点击格子编辑")
+    patternHeader.setText (custom ? TR ("Pattern — click on/off · Shift accent · Alt ghost",
+                                       "节奏型 — 左键开关 · Shift 重音 · Alt 鬼音")
                                   : TR ("Pattern — click to copy into Custom", "节奏型 — 点击会复制到自定义"),
                            juce::dontSendNotification);
     clearPartButton.setEnabled (custom);
@@ -575,6 +597,8 @@ void DrumPanel::loadCustomDrums()
     s.defaultBpm = (float) juce::jlimit (30.0, 300.0, xml->getDoubleAttribute ("bpm", (double) s.defaultBpm));
     s.defaultSwing = (float) juce::jlimit (0.0, 1.0, xml->getDoubleAttribute ("swing", (double) s.defaultSwing));
     s.clickOnly = false;
+    s.verseB = DrumPattern {};
+    s.chorusB = DrumPattern {};
 
     auto loadPart = [&xml] (const char* tag, DrumPattern& p)
     {
@@ -597,9 +621,7 @@ void DrumPanel::loadCustomDrums()
     };
 
     loadPart ("verse", s.verse);
-    loadPart ("verseB", s.verseB);
     loadPart ("chorus", s.chorus);
-    loadPart ("chorusB", s.chorusB);
     loadPart ("fill", s.fill);
 }
 
@@ -639,9 +661,7 @@ void DrumPanel::saveCustomDrums()
     };
 
     addPart ("verse", s.verse);
-    addPart ("verseB", s.verseB);
     addPart ("chorus", s.chorus);
-    addPart ("chorusB", s.chorusB);
     addPart ("fill", s.fill);
 
     settings.setValue ("customDrums", xml.toString (juce::XmlElement::TextFormat().singleLine()));
