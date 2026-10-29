@@ -79,8 +79,16 @@ recording while a tab is open.
 - Select a take to load its waveform (the dry stem that replay uses). **Click
   the waveform to replay from that point**; click again anywhere to jump while
   it plays. **Drag** to select a region (right-click clears it).
-- The playhead follows replay. The take list shows the take's date, length and
-  whether it is synced to the tab.
+- **Play / Pause / Stop**: Play continues from the playhead (or starts at 0);
+  Pause keeps the playhead where it is; Stop rewinds to the start. **SPACE**
+  toggles play/pause. The playhead follows playback.
+- **Full mix (off = dry)** switches playback between:
+  - **On** — the recorded `mix.wav`: guitar + effects + drums + backing + loop
+    exactly as you recorded it.
+  - **Off** — the dry stem through the **current** effect chain (re-amping).
+  It defaults to On. The waveform/playhead is the dry stem in both cases;
+  punch edits only apply to the dry/re-amped path.
+- The take list shows the take's date, length and whether it is synced to the tab.
 - While **recording**, the timeline shows a live 15-second input waveform
   (`LIVE INPUT`) with the record head at the right.
 - **Punch Selection**: drag a region, then press **Punch Selection**. You get a
@@ -91,9 +99,11 @@ recording while a tab is open.
   the timeline show the layers. Punching the same region again replaces it
   (the later clip wins).
 - **Export WAV…**: choose **Re-amped (current chain)** to bounce the take with
-  all punches through the current effect chain, or **Dry DI stem** for the
-  unprocessed mono take. The export uses the whole take, not just the selection;
-  it is the guitar take (the original mix.wav keeps the backing/drums mix).
+  all punches through the current effect chain, **Dry DI stem** for the
+  unprocessed mono take, or **Full recorded mix (pre-punch)** to export the
+  original `mix.wav` (guitar + effects + drums + backing + loop as recorded;
+  punch clips are not applied to this mode). The export uses the whole take,
+  not just the selection.
 
 - **Record** writes a take folder under the recordings folder (default
   `Documents\Tone_Tab\recordings`; use **Change Folder…** in the Record view to
@@ -110,7 +120,7 @@ recording while a tab is open.
 
 | Key | Action |
 | --- | --- |
-| Space | Practice: play / pause · Drums: start / stop · Loop: record / close / overdub |
+| Space | Practice: play / pause · Record: play / pause · Drums: start / stop · Loop: record / close / overdub |
 | Esc (Loop) | Stop the loop |
 | ← / → | Previous / next bar |
 | Home | Back to the start |

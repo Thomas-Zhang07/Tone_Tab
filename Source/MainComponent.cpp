@@ -468,7 +468,19 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
             spaceHeld = true;
         return practicePanel->keyPressed (key);
     }
-    if (view == View::record || view == View::stats)
+
+    if (view == View::record)
+    {
+        if (key == juce::KeyPress::spaceKey)
+        {
+            spaceHeld = true;
+            recordingPanel->togglePlayPause();
+            return true;
+        }
+        return false;
+    }
+
+    if (view == View::stats)
         return false;
 
     if (key == juce::KeyPress::spaceKey)

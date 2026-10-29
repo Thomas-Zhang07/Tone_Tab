@@ -359,22 +359,65 @@ std::shared_ptr<juce::AudioBuffer<float>> Recorder::loadEffectiveDry (
 }
 
 bool Recorder::startPlayback (const juce::File& wav, juce::String& error, Info* infoOut,
-                              double startSeconds)
+                              double startSeconds, bool fullMix)
 {
     stopPlayback();
+    fullMixPlaying.store (false);
 
     Info info;
     double rate = 0.0;
-    auto data = loadEffectiveDry (wav, error, &info, &rate);
-    if (data == nullptr)
-        return false;
+    std::shared_ptr<juce::AudioBuffer<float>> data;
+
+    if (fullMix)
+    {
+        auto mixFile = wav;
+        if (! wav.getFileName().equalsIgnoreCase ("mix.wav"))
+        {
+            const auto sibling = wav.getSiblingFile ("mix.wav");
+            if (sibling.existsAsFile())
+                mixFile = sibling;
+        }
+
+        info = Info::loadFor (wav);
+        if (! mixFile.existsAsFile() || ! mixFile.getFileName().equalsIgnoreCase ("mix.wav"))
+        {
+            error = TR ("No mix.wav for this take; turn Full mix off to play the dry stem.",
+                        "这次录音没有 mix.wav；关掉“完整混音”用干声回放。");
+            return false;
+        }
+
+        juce::AudioFormatManager fm;
+        fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> reader (fm.createReaderFor (mixFile));
+        if (reader == nullptr)
+        {
+            error = TR ("Cannot read the recorded mix", "读不了录音的完整混音");
+            return false;
+        }
+        if (reader->lengthInSamples > (juce::int64) (reader->sampleRate * 60 * 30))
+        {
+            error = TR ("Recording too long (over 30 minutes)", "录音太长了（超过 30 分钟）");
+            return false;
+        }
+
+        data = std::make_shared<juce::AudioBuffer<float>> (2, (int) reader->lengthInSamples);
+        reader->read (data.get(), 0, (int) reader->lengthInSamples, 0, true, true);
+        rate = reader->sampleRate;
+        fullMixPlaying.store (true);
+    }
+    else
+    {
+        data = loadEffectiveDry (wav, error, &info, &rate);
+        if (data == nullptr)
+            return false;
+    }
 
     if (infoOut != nullptr) *infoOut = info;
 
     playbackRate = rate;
     playbackLength = data->getNumSamples() / rate;
     // Starting from a clicked position should not fire the tab-sync marker.
-    playbackSync.store (info.synced && ! info.waitMode && startSeconds <= 0.0);
+    playbackSync.store (! fullMix && info.synced && ! info.waitMode && startSeconds <= 0.0);
     playbackSyncSample.store (info.syncSample);
     playbackSyncBeat.store (info.syncBeat);
     playbackPos.store (juce::jlimit<int64_t> (0, data->getNumSamples(),
@@ -394,7 +437,32 @@ void Recorder::stopPlayback()
 {
     playbackOn.store (false);
     playbackPtr.store (nullptr);
+    fullMixPlaying.store (false);
     pendingSeek.store (-1);
+}
+
+void Recorder::renderFullMix (float* left, float* right, int n) noexcept
+{
+    auto* buf = (playbackOn.load() && fullMixPlaying.load (std::memory_order_acquire))
+                    ? playbackPtr.load() : nullptr;
+    if (buf == nullptr)
+        return;
+
+    const int64_t start = fullMixBlockStart.load (std::memory_order_relaxed);
+    const int64_t len = buf->getNumSamples();
+    const int channels = buf->getNumChannels();
+    const auto* l = buf->getReadPointer (0);
+    const auto* r = buf->getReadPointer (channels > 1 ? 1 : 0);
+
+    for (int i = 0; i < n; ++i)
+    {
+        const auto t = start + (int64_t) i;
+        if (t >= 0 && t < len)
+        {
+            left[i] += l[(int) t];
+            right[i] += r[(int) t];
+        }
+    }
 }
 
 void Recorder::setPlaybackPosition (double seconds) noexcept
@@ -666,6 +734,24 @@ bool Recorder::replaceInput (float* mono, int n) noexcept
     playbackInUse.store (buf);
     if (buf == nullptr)
         return false;
+
+    if (fullMixPlaying.load (std::memory_order_acquire))
+    {
+        int64_t pos = playbackPos.load();
+        if (const auto seek = pendingSeek.exchange (-1); seek >= 0)
+            pos = seek;
+
+        fullMixBlockStart.store (pos, std::memory_order_relaxed);
+        playbackPos.store (pos + n);
+
+        if (pos + n >= buf->getNumSamples())
+        {
+            playbackOn.store (false);
+            player.setPlayingFlag (false);
+        }
+
+        return false;   // keep the live input; the mix is added at the output
+    }
 
     if (punchRecording.load (std::memory_order_acquire))
     {

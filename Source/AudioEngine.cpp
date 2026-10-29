@@ -288,6 +288,9 @@ void AudioEngine::processSubBlock (const float* guitarIn, float* outL, float* ou
         // Render after the drums so the looper sees this block's drum grid.
         looper.render (outL, outR, n, drums);
 
+        // Recorded full-mix playback (drums + backing + loop) for the Record view.
+        recorder.renderFullMix (outL, outR, n);
+
         // Full mix: guitar + effects + backing + drums + loop. The dry stem is
         // captured earlier, before input gain.
         recorder.captureMix (outL, outR, n);

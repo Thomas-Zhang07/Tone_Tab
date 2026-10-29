@@ -73,8 +73,13 @@ public:
     bool isRecording() const                    { return recording.load(); }
     double getRecordedSeconds() const;
 
+    // fullMix plays the recorded mix.wav directly (drums + backing + loop),
+    // instead of the dry stem through the current chain.
     bool startPlayback (const juce::File& wav, juce::String& error,
-                        Info* infoOut = nullptr, double startSeconds = 0.0);
+                        Info* infoOut = nullptr, double startSeconds = 0.0,
+                        bool fullMix = false);
+    // Adds the recorded full mix to the output during full-mix playback.
+    void renderFullMix (float* left, float* right, int n) noexcept;
     void stopPlayback();
     // Move the replay head while playing. Safe to call from the message thread.
     void setPlaybackPosition (double seconds) noexcept;
@@ -164,7 +169,8 @@ private:
     std::vector<std::shared_ptr<juce::AudioBuffer<float>>> retired;
     std::atomic<juce::AudioBuffer<float>*> playbackPtr { nullptr }, playbackInUse { nullptr };
     std::atomic<bool> playbackOn { false };
-    std::atomic<int64_t> playbackPos { 0 }, pendingSeek { -1 };
+    std::atomic<bool> fullMixPlaying { false };
+    std::atomic<int64_t> playbackPos { 0 }, pendingSeek { -1 }, fullMixBlockStart { 0 };
     std::atomic<bool> playbackSync { false };
     std::atomic<int64_t> playbackSyncSample { 0 };
     std::atomic<double> playbackSyncBeat { 0.0 };

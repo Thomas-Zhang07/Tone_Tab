@@ -11,18 +11,43 @@ namespace
     class ExportJob : public juce::ThreadWithProgressWindow
     {
     public:
-        ExportJob (juce::File sourceIn, juce::File outputIn, bool reampIn,
+        ExportJob (juce::File sourceIn, juce::File outputIn, int modeIn,
                    std::shared_ptr<juce::XmlElement> chainXmlIn)
             : juce::ThreadWithProgressWindow (TR ("Exporting WAV…", "正在导出 WAV…"), true, true),
               source (std::move (sourceIn)),
               output (std::move (outputIn)),
-              reamp (reampIn),
+              mode (modeIn),
               chainXml (std::move (chainXmlIn))
         {
         }
 
         void run() override
         {
+            // The recorded mix already contains drums, backing and the loop.
+            if (mode == 3)
+            {
+                if (! source.existsAsFile())
+                {
+                    error = TR ("The recorded mix.wav is missing", "找不到录音的 mix.wav");
+                    return;
+                }
+                if (source == output)
+                {
+                    error = TR ("Choose a different output file", "请选择不同的输出文件");
+                    return;
+                }
+
+                setStatusMessage (TR ("Copying the recorded mix…", "复制完整录音…"));
+                setProgress (0.1);
+                if (! source.copyFileTo (output))
+                {
+                    error = TR ("Cannot write ", "没法写入 ") + output.getFullPathName();
+                    return;
+                }
+                setProgress (1.0);
+                return;
+            }
+
             setStatusMessage (TR ("Reading the take…", "读取录音…"));
             setProgress (0.02);
 
@@ -39,7 +64,7 @@ namespace
                 return;
             }
 
-            if (! reamp)
+            if (mode == 2)
             {
                 std::unique_ptr<juce::OutputStream> stream (output.createOutputStream());
                 if (stream == nullptr)
@@ -171,7 +196,7 @@ namespace
 
     private:
         juce::File source, output;
-        bool reamp = true;
+        int mode = 1;
         std::shared_ptr<juce::XmlElement> chainXml;
     };
 }
@@ -188,8 +213,8 @@ RecordingPanel::RecordingPanel (AudioEngine& engineToUse, EffectChain& chainToUs
     title.setFont (juce::FontOptions (21.0f, juce::Font::bold));
     addAndMakeVisible (title);
 
-    hint.setText (TR ("Click to replay from a point; drag a region then Punch for a non-destructive re-take. Export renders the current chain.",
-                      "点波形从该处回放；拖出选区后点“补录”做非破坏性重录。导出会用当前效果器链渲染。"),
+    hint.setText (TR ("Click to replay from a point; drag a region then Punch for a non-destructive re-take. SPACE plays / pauses.",
+                      "点波形从该处回放；拖出选区后点“补录”做非破坏性重录。空格播放 / 暂停。"),
                   juce::dontSendNotification);
     hint.setFont (juce::FontOptions (13.0f));
     hint.setColour (juce::Label::textColourId, juce::Colour (0xff9a9a9a));
@@ -204,9 +229,22 @@ RecordingPanel::RecordingPanel (AudioEngine& engineToUse, EffectChain& chainToUs
     recordButton.onClick = [this] { toggleRecord(); };
     addAndMakeVisible (recordButton);
 
-    replayButton.setButtonText (TR ("Replay dry through chain", "干声走当前效果器链回放"));
-    replayButton.onClick = [this] { toggleReplay(); };
+    setWantsKeyboardFocus (true);
+
+    replayButton.setButtonText (TR ("▶ Play", "▶ 播放"));
+    replayButton.setTooltip (TR ("Play / continue from the playhead (SPACE)", "从播放头开始 / 继续播放（空格）"));
+    replayButton.onClick = [this] { startReplayFrom (resumeSeconds); };
     addAndMakeVisible (replayButton);
+
+    pauseButton.setButtonText (TR ("❚❚ Pause", "❚❚ 暂停"));
+    pauseButton.setTooltip (TR ("Pause and keep the playhead (SPACE)", "暂停并保留播放头（空格）"));
+    pauseButton.onClick = [this] { pauseReplay(); };
+    addAndMakeVisible (pauseButton);
+
+    stopButton.setButtonText (TR ("■ Stop", "■ 停止"));
+    stopButton.setTooltip (TR ("Stop and rewind to the start", "停止并回到开头"));
+    stopButton.onClick = [this] { stopReplay(); };
+    addAndMakeVisible (stopButton);
 
     punchButton.setButtonText (TR ("Punch Selection", "补录选区"));
     punchButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff7a4a1f));
@@ -215,6 +253,7 @@ RecordingPanel::RecordingPanel (AudioEngine& engineToUse, EffectChain& chainToUs
 
     exportModeBox.addItem (TR ("Re-amped (current chain)", "重过效果器（当前链）"), 1);
     exportModeBox.addItem (TR ("Dry DI stem", "干声 DI"), 2);
+    exportModeBox.addItem (TR ("Full recorded mix (pre-punch)", "完整录音混音（不含补录）"), 3);
     exportModeBox.setSelectedId (1, juce::dontSendNotification);
     exportModeBox.setTooltip (TR ("Re-amped renders the take through the current chain; Dry writes the DI stem.",
                                   "重过效果器会把录音过一遍当前效果器链；干声只导出 DI。"));
@@ -223,6 +262,24 @@ RecordingPanel::RecordingPanel (AudioEngine& engineToUse, EffectChain& chainToUs
     exportButton.setButtonText (TR ("Export WAV…", "导出 WAV…"));
     exportButton.onClick = [this] { exportSelectedTake(); };
     addAndMakeVisible (exportButton);
+
+    fullMixToggle.setButtonText (TR ("Full mix (off = dry)", "完整混音（关 = 干声）"));
+    fullMixToggle.setToggleState (settings.getBoolValue ("recordFullMix", true),
+                                  juce::dontSendNotification);
+    fullMixToggle.setTooltip (TR ("ON: play the recorded mix.wav (drums, backing, loop). "
+                                  "OFF: play the dry stem through the current chain. "
+                                  "Punch edits only apply to the dry/re-amped path.",
+                                  "开：播放录音的完整 mix.wav（鼓机、伴奏、循环）。"
+                                  "关：干声走当前效果器链。补录只作用于干声路径。"));
+    fullMixToggle.onClick = [this]
+    {
+        settings.setValue ("recordFullMix", fullMixToggle.getToggleState());
+        if (recorder.isPlayingBack())
+            stopReplay();
+
+        updateControls();
+    };
+    addAndMakeVisible (fullMixToggle);
 
     deleteButton.setButtonText (TR ("Delete Take", "删除录音"));
     deleteButton.onClick = [this] { deleteSelected(); };
@@ -282,7 +339,9 @@ void RecordingPanel::resized()
     top.removeFromRight (10);
     status.setBounds (top);
 
-    hint.setBounds (area.removeFromTop (38));
+    auto hintRow = area.removeFromTop (38);
+    fullMixToggle.setBounds (hintRow.removeFromRight (200).reduced (0, 6));
+    hint.setBounds (hintRow);
     area.removeFromTop (6);
 
     const int timelineH = juce::jlimit (150, 240, area.getHeight() * 2 / 5);
@@ -290,7 +349,11 @@ void RecordingPanel::resized()
     area.removeFromTop (8);
 
     auto bottom = area.removeFromBottom (34);
-    replayButton.setBounds (bottom.removeFromLeft (150).reduced (0, 1));
+    replayButton.setBounds (bottom.removeFromLeft (66).reduced (0, 1));
+    bottom.removeFromLeft (8);
+    pauseButton.setBounds (bottom.removeFromLeft (74).reduced (0, 1));
+    bottom.removeFromLeft (8);
+    stopButton.setBounds (bottom.removeFromLeft (62).reduced (0, 1));
     bottom.removeFromLeft (8);
     punchButton.setBounds (bottom.removeFromLeft (105).reduced (0, 1));
     bottom.removeFromLeft (8);
@@ -349,7 +412,7 @@ void RecordingPanel::paintListBoxItem (int row, juce::Graphics& g, int width, in
 
 void RecordingPanel::listBoxItemDoubleClicked (int, const juce::MouseEvent&)
 {
-    toggleReplay();
+    startReplayFrom (0.0);
 }
 
 void RecordingPanel::selectedRowsChanged (int)
@@ -357,12 +420,14 @@ void RecordingPanel::selectedRowsChanged (int)
     if (recorder.isPlayingBack())
         recorder.stopPlayback();
 
+    resumeSeconds = 0.0;
     loadSelectedTake();
     updateControls();
 }
 
 void RecordingPanel::loadSelectedTake()
 {
+    resumeSeconds = 0.0;
     const int row = list.getSelectedRow();
     if (juce::isPositiveAndBelow (row, (int) takes.size()))
     {
@@ -413,8 +478,20 @@ void RecordingPanel::timerCallback()
     {
         timeline.setRecordingLive (false, 0.0, 0, 0.01, nullptr);
         timeline.setPunchState (false, 0.0, 0.0);
-        timeline.setPlayPosition (recorder.isPlayingBack() ? recorder.getPlaybackSeconds() : 0.0,
-                                  false, 0.0);
+
+        if (recorder.isPlayingBack())
+        {
+            resumeSeconds = recorder.getPlaybackSeconds();
+        }
+        else
+        {
+            const auto length = recorder.getPlaybackLength();
+            if (resumeSeconds > 0.0 && length > 0.0
+                && recorder.getPlaybackSeconds() >= length - 0.05)
+                resumeSeconds = 0.0;   // playback reached the end, not a pause
+        }
+
+        timeline.setPlayPosition (resumeSeconds, false, 0.0);
     }
 
     updateControls();
@@ -484,6 +561,7 @@ void RecordingPanel::toggleRecord()
     }
 
     recorder.stopPlayback();
+    resumeSeconds = 0.0;
     timeline.clearSelection();
     selectionStart = selectionEnd = -1.0;
 
@@ -507,32 +585,7 @@ void RecordingPanel::toggleRecord()
     updateControls();
 }
 
-void RecordingPanel::toggleReplay()
-{
-    if (recorder.isRecording() || recorder.isPunchRecording())
-        return;
-
-    if (recorder.isPlayingBack())
-    {
-        recorder.stopPlayback();
-        updateControls();
-        return;
-    }
-
-    const int row = list.getSelectedRow();
-    if (! juce::isPositiveAndBelow (row, (int) takes.size()))
-        return;
-
-    player.setPlaying (false);
-    juce::String error;
-    if (! recorder.startPlayback (takes[(size_t) row].mixFile, error))
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
-                                                TR ("Cannot Replay", "没法回放"), error);
-
-    updateControls();
-}
-
-void RecordingPanel::seekReplayTo (double seconds)
+void RecordingPanel::startReplayFrom (double seconds)
 {
     if (recorder.isRecording() || recorder.isPunchRecording())
         return;
@@ -546,16 +599,88 @@ void RecordingPanel::seekReplayTo (double seconds)
     if (recorder.isPlayingBack())
     {
         recorder.setPlaybackPosition (seconds);
-    }
-    else
-    {
-        juce::String error;
-        if (! recorder.startPlayback (takes[(size_t) row].mixFile, error, nullptr, seconds))
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
-                                                    TR ("Cannot Replay", "没法回放"), error);
+        resumeSeconds = seconds;
+        updateControls();
+        return;
     }
 
+    const double length = takes[(size_t) row].info.lengthSeconds > 0.0
+                              ? takes[(size_t) row].info.lengthSeconds
+                              : timeline.getLengthSeconds();
+    if (length > 0.0 && seconds >= length - 0.01)
+        seconds = 0.0;   // pressing Play at the very end starts again
+
+    juce::String error;
+    if (! recorder.startPlayback (takes[(size_t) row].mixFile, error, nullptr, seconds,
+                                  fullMixToggle.getToggleState()))
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                TR ("Cannot Replay", "没法回放"), error);
+    else
+        resumeSeconds = seconds;
+
     updateControls();
+}
+
+void RecordingPanel::pauseReplay()
+{
+    if (! recorder.isPlayingBack() || recorder.isPunchRecording())
+        return;
+
+    resumeSeconds = recorder.getPlaybackSeconds();
+    recorder.stopPlayback();
+    updateControls();
+}
+
+void RecordingPanel::stopReplay()
+{
+    if (recorder.isPlayingBack())
+        recorder.stopPlayback();
+
+    resumeSeconds = 0.0;
+    updateControls();
+}
+
+void RecordingPanel::seekReplayTo (double seconds)
+{
+    startReplayFrom (seconds);
+}
+
+void RecordingPanel::togglePlayPause()
+{
+    if (recorder.isRecording() || recorder.isPunchRecording())
+        return;
+
+    if (recorder.isPlayingBack())
+        pauseReplay();
+    else
+        startReplayFrom (resumeSeconds);
+}
+
+bool RecordingPanel::keyPressed (const juce::KeyPress& key)
+{
+    if (key == juce::KeyPress::spaceKey)
+    {
+        if (spaceHeld && juce::KeyPress::isKeyCurrentlyDown (juce::KeyPress::spaceKey))
+            return true;
+
+        spaceHeld = true;
+        togglePlayPause();
+        return true;
+    }
+
+    return false;
+}
+
+bool RecordingPanel::keyStateChanged (bool)
+{
+    if (! juce::KeyPress::isKeyCurrentlyDown (juce::KeyPress::spaceKey))
+        spaceHeld = false;
+    return false;
+}
+
+void RecordingPanel::focusLost (FocusChangeType)
+{
+    spaceHeld = false;
 }
 
 void RecordingPanel::togglePunch()
@@ -575,6 +700,7 @@ void RecordingPanel::togglePunch()
         return;
 
     player.setPlaying (false);
+    resumeSeconds = 0.0;
     juce::String error;
     if (! recorder.startPunchRecording (takes[(size_t) row].mixFile,
                                        timeline.getSelectionStart(),
@@ -597,9 +723,10 @@ void RecordingPanel::exportSelectedTake()
         return;
 
     const auto take = takes[(size_t) row];
-    const bool reamp = exportModeBox.getSelectedId() != 2;
+    const int mode = juce::jlimit (1, 3, exportModeBox.getSelectedId());
     const auto folder = take.mixFile.getParentDirectory();
-    const auto suggested = folder.getChildFile (folder.getFileName() + (reamp ? "-mix.wav" : "-dry.wav"));
+    const auto suffix = mode == 1 ? "-reamp.wav" : mode == 2 ? "-dry.wav" : "-full.wav";
+    const auto suggested = folder.getChildFile (folder.getFileName() + suffix);
 
     auto chainXml = effectChain.toXml();
     auto chainPtr = std::shared_ptr<juce::XmlElement> (chainXml.release());
@@ -608,7 +735,7 @@ void RecordingPanel::exportSelectedTake()
     exportChooser->launchAsync (juce::FileBrowserComponent::saveMode
                                     | juce::FileBrowserComponent::canSelectFiles
                                     | juce::FileBrowserComponent::warnAboutOverwriting,
-                                [this, take, reamp, chainPtr] (const juce::FileChooser& fc)
+                                [this, take, mode, chainPtr] (const juce::FileChooser& fc)
     {
         auto output = fc.getResult();
         if (output == juce::File())
@@ -617,7 +744,7 @@ void RecordingPanel::exportSelectedTake()
             output = output.withFileExtension ("wav");
 
         // ThreadWithProgressWindow owns itself through threadComplete().
-        (new ExportJob (take.mixFile, output, reamp, chainPtr))->launchThread();
+        (new ExportJob (take.mixFile, output, mode, chainPtr))->launchThread();
     });
 }
 
@@ -684,15 +811,16 @@ void RecordingPanel::updateControls()
     const bool recording = recorder.isRecording();
     const bool punching = recorder.isPunchRecording();
     const bool replaying = recorder.isPlayingBack();
-    const bool hasTake = list.getSelectedRow() >= 0;
+    const bool hasTake = juce::isPositiveAndBelow (list.getSelectedRow(), (int) takes.size());
+    const bool paused = ! recording && ! punching && ! replaying && resumeSeconds > 0.0;
 
     recordButton.setButtonText (recording ? TR ("■ Stop Recording", "■ 停止录音")
                                           : TR ("● Record", "● 录音"));
     recordButton.setEnabled (! replaying && ! punching);
 
-    replayButton.setButtonText (replaying && ! punching ? TR ("■ Stop Replay", "■ 停止回放")
-                                                        : TR ("Replay dry through chain", "干声走当前效果器链回放"));
-    replayButton.setEnabled (! recording && ! punching && hasTake);
+    replayButton.setEnabled (! recording && ! punching && ! replaying && hasTake);
+    pauseButton.setEnabled (replaying && ! punching);
+    stopButton.setEnabled ((replaying && ! punching) || paused);
 
     punchButton.setButtonText (punching ? TR ("■ Stop Punch", "■ 停止补录")
                                         : TR ("Punch Selection", "补录选区"));
@@ -704,6 +832,7 @@ void RecordingPanel::updateControls()
     exportModeBox.setEnabled (exportButton.isEnabled());
     list.setEnabled (! recording && ! punching);
     timeline.setEnabled (! recording && ! punching);
+    fullMixToggle.setEnabled (! recording && ! punching);
 
     if (punching)
     {
@@ -717,8 +846,16 @@ void RecordingPanel::updateControls()
                             + TR (" s  ·  mix.wav + dry.wav", " 秒  ·  mix.wav + dry.wav"),
                         juce::dontSendNotification);
     else if (replaying)
-        status.setText (TR ("Replaying ", "回放中 ") + juce::String (recorder.getPlaybackSeconds(), 2)
-                            + TR (" s  ·  click the waveform to jump", " 秒  ·  点波形跳转"),
+        status.setText (TR ("Playing ", "播放中 ") + juce::String (recorder.getPlaybackSeconds(), 2)
+                            + TR (" s  ·  ", " 秒  ·  ")
+                            + (fullMixToggle.getToggleState() ? TR ("full mix", "完整混音")
+                                                              : TR ("dry + chain", "干声 + 效果器"))
+                            + TR ("  ·  SPACE pauses; click the waveform to jump",
+                                  "  ·  空格暂停；点波形跳转"),
+                        juce::dontSendNotification);
+    else if (paused)
+        status.setText (TR ("Paused at ", "暂停在 ") + juce::String (resumeSeconds, 2)
+                            + TR (" s  ·  SPACE continues", " 秒  ·  空格继续"),
                         juce::dontSendNotification);
     else
     {

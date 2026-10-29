@@ -18,8 +18,12 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    bool keyPressed (const juce::KeyPress&) override;
+    bool keyStateChanged (bool isKeyDown) override;
+    void focusLost (FocusChangeType) override;
 
     TakeTimeline& getTimeline() { return timeline; }
+    void togglePlayPause();
 
     int getNumRows() override;
     void paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected) override;
@@ -37,7 +41,9 @@ private:
     void refreshTakes();
     void loadSelectedTake();
     void toggleRecord();
-    void toggleReplay();
+    void startReplayFrom (double seconds);
+    void pauseReplay();
+    void stopReplay();
     void togglePunch();
     void seekReplayTo (double seconds);
     void exportSelectedTake();
@@ -57,12 +63,15 @@ private:
     std::vector<Take> takes;
 
     juce::Label title, status, hint;
-    juce::TextButton recordButton, replayButton, punchButton, deleteButton, refreshButton,
-                     folderButton, chooseFolderButton, exportButton;
+    juce::TextButton recordButton, replayButton, pauseButton, stopButton, punchButton,
+                     deleteButton, refreshButton, folderButton, chooseFolderButton, exportButton;
     juce::ComboBox exportModeBox;
+    juce::ToggleButton fullMixToggle;
     juce::ListBox list;
     TakeTimeline timeline;
     double selectionStart = -1.0, selectionEnd = -1.0;
+    double resumeSeconds = 0.0;   // playhead kept by Pause
+    bool spaceHeld = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RecordingPanel)
 };

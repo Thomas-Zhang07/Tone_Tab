@@ -629,10 +629,19 @@ int runOfflineTests (int argc, char* argv[])
 
         panel.getTimeline().setSelection (1.0, 4.0);
 
-        juce::String error;
-        engine.getRecorder().startPlayback (mix, error, nullptr, 1.5);
+        const auto space = juce::KeyPress (juce::KeyPress::spaceKey);
+        panel.keyPressed (space);                       // SPACE = play
         std::vector<float> in ((size_t) (0.5 * sr), 0.0f), l (in.size()), r (in.size());
         engine.processOffline (in.data(), l.data(), r.data(), (int) in.size());
+        const bool spaceStarted = engine.getRecorder().isPlayingBack();
+
+        panel.keyPressed (space);                       // SPACE = pause
+        const bool spacePaused = ! engine.getRecorder().isPlayingBack();
+        panel.keyPressed (space);                       // SPACE = continue
+        const bool spaceResumed = engine.getRecorder().isPlayingBack();
+        check (spaceStarted && spacePaused && spaceResumed,
+               T ("录音页空格：播放 / 暂停 / 继续"));
+
         for (int i = 0; i < 8; ++i)
         {
             juce::Thread::sleep (10);
@@ -690,7 +699,7 @@ int runOfflineTests (int argc, char* argv[])
             engine.getRecorder().stopRecording();
         }
 
-        return 0;
+        return failures == 0 ? 0 : 1;
     }
     if (argc > 2 && juce::String (argv[1]) == "--loop-ui")
     {
@@ -2424,6 +2433,56 @@ int runOfflineTests (int argc, char* argv[])
             check (problems.isEmpty() && st.finite && st.peak > 0.01f && st.peak < 2.0f,
                    T ("导出的重过效果器音频 峰值 ") + db (st.peak) + T ("  长度 ") + juce::String (rate, 0) + " Hz");
         }
+
+        dir.deleteRecursively();
+    }
+
+    // ---------------------------------------------------------------------
+    std::printf ("\n== 20. 完整混音回放（鼓机 / 伴奏 / 循环）\n");
+    {
+        auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                       .getChildFile ("tone_tab_fullmix").getNonexistentSibling();
+        dir.createDirectory();
+        auto take = dir.getChildFile ("Take");
+        take.createDirectory();
+        auto dry = take.getChildFile ("dry.wav");
+        auto mix = take.getChildFile ("mix.wav");
+
+        std::vector<float> silence ((size_t) (1.0 * sr), 0.0f);
+        std::vector<float> mixed ((size_t) (1.0 * sr), 0.0f);
+        for (size_t i = 0; i < mixed.size(); ++i)
+            mixed[i] = 0.2f * (float) std::sin (juce::MathConstants<double>::twoPi * 1000.0 * (double) i / sr);
+
+        writeWav (dry, silence, silence);
+        writeWav (mix, mixed, mixed);
+
+        Recorder::Info info;
+        info.lengthSeconds = 1.0;
+        info.sampleRate = sr;
+        info.mixFile = mix;
+        info.dryFile = dry;
+        take.getChildFile ("take.json").replaceWithText (juce::JSON::toString (info.toVar()));
+
+        AudioEngine e;
+        e.prepareForOffline (sr, block);
+        e.setOutputGainDb (0.0f);
+        auto& rec = e.getRecorder();
+        juce::String err;
+
+        rec.startPlayback (mix, err, nullptr, 0.0, false);   // dry: silent input
+        std::vector<float> in ((size_t) (0.2 * sr), 0.0f), l (in.size()), r (in.size());
+        e.processOffline (in.data(), l.data(), r.data(), (int) in.size());
+        const auto dryStats = stats (l, r);
+        rec.stopPlayback();
+
+        rec.startPlayback (mix, err, nullptr, 0.0, true);    // full mix
+        e.processOffline (in.data(), l.data(), r.data(), (int) in.size());
+        const auto mixStats = stats (l, r);
+        check (dryStats.peak < 1.0e-4f && mixStats.peak > 0.1f,
+               T ("干声回放是静音、完整混音有鼓/伴奏：") + db (dryStats.peak) + " → " + db (mixStats.peak));
+        check (std::abs (rec.getPlaybackSeconds() - 0.2) < 0.01,
+               T ("完整混音播放头 ") + juce::String (rec.getPlaybackSeconds(), 3) + T (" 秒"));
+        rec.stopPlayback();
 
         dir.deleteRecursively();
     }

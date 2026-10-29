@@ -14,8 +14,10 @@ interface, ASCII paths, a rewritten drum engine, and dual-stem recording.
   plus a Fender shortcut at the top of the add menu; preset dropdown starts with
   Fender NAM and Captures.
 - **Record view**: dedicated tab with a real-time input waveform while recording,
-  a take timeline, click-to-seek replay, region selection, record/stop, take
-  list, dry-through-chain replay, delete, refresh and open-folder controls.
+  a take timeline, click-to-seek, Play / Pause / Stop (Space toggles play/pause),
+  region selection, record/stop, take list, delete, refresh and open-folder
+  controls. **Full mix (off = dry)** switches playback between the recorded
+  mix.wav (drums, backing, loop) and the dry stem through the current chain.
   **Punch Selection** records a non-destructive layer over the selected region
   (the original mix.wav/dry.wav are never modified; clips live in the take's
   `clips/` folder and are listed in `take.json`). **Export WAV…** bounces the
