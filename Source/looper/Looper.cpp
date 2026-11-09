@@ -3,11 +3,14 @@
 #include "fx/HostTempo.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 // ---- setup ------------------------------------------------------------------
 
 void Looper::prepare (double newSampleRate, int blockSize, bool shouldEnable)
 {
+    const juce::ScopedLock sl (bufferLock);
+
     const double sr = newSampleRate > 0.0 ? newSampleRate : 48000.0;
     const int newCapacity = shouldEnable ? (int) std::ceil (maxSeconds * sr) : 0;
 
@@ -24,8 +27,8 @@ void Looper::prepare (double newSampleRate, int blockSize, bool shouldEnable)
     inputBuffer.setSize (2, juce::jmax (256, blockSize), false, true, false);
     inputBuffer.clear();
 
-    // One envelope bucket is ~10 ms; 3000 buckets span the 30 s loop, and the
-    // live ring holds the most recent ~5 s.
+    // One envelope bucket is ~10 ms; 12000 buckets span the 120 s buffer, and
+    // the live ring holds the most recent ~5 s.
     waveformBucketSamples.store (juce::jmax (64, (int) std::lround (0.010 * sampleRate)));
     if (waveform == nullptr)
         waveform = std::make_unique<WaveArray>();
@@ -40,6 +43,7 @@ void Looper::prepare (double newSampleRate, int blockSize, bool shouldEnable)
     livePeak = 0.0f;
     liveWritePos.store (0);
     resetWaveform();
+    waveformDirty.store (false);
 
     // prepare() runs while audio is stopped; a fresh start always begins empty.
     current = State::empty;
@@ -54,10 +58,24 @@ void Looper::prepare (double newSampleRate, int blockSize, bool shouldEnable)
     fadeGain = 0.0f;
     freeBeats = 0.0;
     captured = 0;
+    extOldLen = extEnd = extRecorded = 0;
+    extWasPlaying = false;
+    clickPhaseSamples = 0.0;
+    clickAngle = 0.0;
+    clickSamplesLeft = 0;
+    clickLengthSamples = 0;
+    clickIndex = 0;
+    clickFreq = 1200.0f;
 
     toggleRequested.store (false);
     stopRequested.store (false);
     clearRequested.store (false);
+    seekRequest.store (-1.0);
+    pendingExtendFrames.store (0);
+
+    undoBuffer.setSize (0, 0);
+    undoLen = 0;
+    undoAvailable.store (false);
 
     state.store (current);
     loopFrames.store (0);
@@ -67,6 +85,13 @@ void Looper::prepare (double newSampleRate, int blockSize, bool shouldEnable)
     recordedSeconds.store (0.0);
     loopBpm.store (0.0);
     loopBars.store (0.0);
+    loopBeatsPerBar.store (4);
+    countInRemaining.store (0);
+    countInTotal.store (0);
+    extendStartSeconds.store (0.0);
+    extendEndSeconds.store (0.0);
+    revision.store (0);
+    loopId.store (0);
 }
 
 void Looper::capture (const float* left, const float* right, int numSamples) noexcept
@@ -111,7 +136,32 @@ int64_t Looper::samplesToNextBoundary (double gridBeats, int beatsPerBar, double
 
 void Looper::setCurrent (State s)
 {
+    const bool wasArming = current == State::armingRecord || current == State::armingPlay;
     current = s;
+
+    if (wasArming && s != State::armingRecord && s != State::armingPlay)
+    {
+        countInRemaining.store (0);
+        countInTotal.store (0);
+        clickSamplesLeft = 0;
+        clickPhaseSamples = 0.0;
+        clickIndex = 0;
+    }
+}
+
+void Looper::publishLengths()
+{
+    loopFrames.store (loopLen);
+    lengthSeconds.store (loopLen > 0 ? (double) loopLen / sampleRate : 0.0);
+
+    const double bpm = loopBpm.load() > 1.0 ? loopBpm.load() : recordBpm;
+    const int bpb = juce::jmax (1, loopBeatsPerBar.load());
+    loopBars.store (loopLen > 0 ? (double) loopLen / sampleRate * bpm / 60.0 / (double) bpb : 0.0);
+}
+
+void Looper::invalidateUndo()
+{
+    undoAvailable.store (false);
 }
 
 void Looper::resetWaveform() noexcept
@@ -140,6 +190,192 @@ void Looper::pushWaveformPeak (float peak, int bucketSamples) noexcept
     waveFill = 0;
 }
 
+void Looper::rebuildWaveformLocked()
+{
+    resetWaveform();
+    if (loopLen <= 0 || waveform == nullptr)
+        return;
+
+    const int bucketSamples = juce::jmax (1, waveformBucketSamples.load (std::memory_order_relaxed));
+    const int buckets = juce::jmin (waveformBuckets,
+                                    (int) ((loopLen + bucketSamples - 1) / bucketSamples));
+    const auto* l = loopBuffer.getReadPointer (0);
+    const auto* r = loopBuffer.getReadPointer (1);
+
+    int b = 0;
+    int fill = 0;
+    float peak = 0.0f;
+    for (int64_t i = 0; i < loopLen && b < buckets; ++i)
+    {
+        peak = juce::jmax (peak, std::abs (l[i]), std::abs (r[i]));
+        if (++fill >= bucketSamples)
+        {
+            (*waveform)[(size_t) b++].store (peak, std::memory_order_relaxed);
+            peak = 0.0f;
+            fill = 0;
+        }
+    }
+
+    if (b < buckets)
+        (*waveform)[(size_t) b++].store (peak, std::memory_order_relaxed);
+
+    waveWrite = b;
+    waveFill = 0;
+    wavePeak = 0.0f;
+    waveformCount.store (b, std::memory_order_relaxed);
+}
+
+void Looper::updateWaveformIfDirty()
+{
+    if (! waveformDirty.exchange (false, std::memory_order_acq_rel))
+        return;
+
+    const juce::ScopedLock sl (bufferLock);
+    if (current == State::recording || current == State::overdubbing || current == State::extending)
+    {
+        waveformDirty.store (true, std::memory_order_relaxed);
+        return;
+    }
+
+    rebuildWaveformLocked();
+}
+
+// ---- editing (message thread) ----------------------------------------------
+
+bool Looper::canEditNow() const noexcept
+{
+    const auto s = getState();
+    return hasLoop() && (s == State::playing || s == State::stopped);
+}
+
+bool Looper::trimTo (double startSeconds, double endSeconds)
+{
+    if (! (startSeconds >= 0.0) || endSeconds <= startSeconds)
+        return false;
+
+    const juce::ScopedLock sl (bufferLock);
+
+    if (loopLen <= 0 || (current != State::playing && current != State::stopped))
+        return false;
+
+    int64_t a = (int64_t) std::llround (startSeconds * sampleRate);
+    int64_t b = (int64_t) std::llround (endSeconds * sampleRate);
+    a = juce::jlimit<int64_t> (0, loopLen - 1, a);
+    b = juce::jlimit<int64_t> (a + 1, loopLen, b);
+
+    if (b - a < (int64_t) juce::jmax (1.0, 0.02 * sampleRate))
+        return false;
+
+    // Keep the old loop for the one-level undo.
+    undoBuffer.setSize (2, (int) loopLen, false, false, true);
+    for (int ch = 0; ch < 2; ++ch)
+        undoBuffer.copyFrom (ch, 0, loopBuffer, ch, 0, (int) loopLen);
+    undoLen = loopLen;
+
+    const int64_t newLen = b - a;
+    for (int ch = 0; ch < 2; ++ch)
+        std::memmove (loopBuffer.getWritePointer (ch),
+                      loopBuffer.getReadPointer (ch) + a,
+                      (size_t) newLen * sizeof (float));
+
+    if (playPos < a)
+        { /* stay at the same musical point */ }
+    else if (playPos >= b)
+        playPos -= a;
+    else
+        playPos = 0;
+
+    loopLen = newLen;
+    playPos = juce::jlimit<int64_t> (0, loopLen - 1, playPos);
+    publishLengths();
+    rebuildWaveformLocked();
+    undoAvailable.store (true);
+    revision.fetch_add (1);
+    waveformDirty.store (false);
+    return true;
+}
+
+bool Looper::extendByBars (int bars)
+{
+    if (bars <= 0)
+        return false;
+
+    const juce::ScopedLock sl (bufferLock);
+
+    if (loopLen <= 0 || (current != State::playing && current != State::stopped))
+        return false;
+
+    const double bpm = loopBpm.load() > 1.0 ? loopBpm.load() : recordBpm;
+    const int bpb = juce::jmax (1, loopBeatsPerBar.load());
+    const int64_t barSamples = (int64_t) std::llround (60.0 / juce::jmax (30.0, bpm)
+                                                       * (double) bpb * sampleRate);
+    const int64_t add = (int64_t) bars * barSamples;
+
+    if (add <= 0 || loopLen + add > (int64_t) capacity)
+        return false;
+
+    // Snapshot before the buffer grows, then silence the new tail. The audio
+    // thread will not read past loopLen until it takes the extend request.
+    undoBuffer.setSize (2, (int) loopLen, false, false, true);
+    for (int ch = 0; ch < 2; ++ch)
+        undoBuffer.copyFrom (ch, 0, loopBuffer, ch, 0, (int) loopLen);
+    undoLen = loopLen;
+    undoAvailable.store (true);
+
+    for (int ch = 0; ch < 2; ++ch)
+        loopBuffer.clear (ch, (int) loopLen, (int) add);
+
+    pendingExtendFrames.store (add, std::memory_order_release);
+    return true;
+}
+
+bool Looper::undoEdit()
+{
+    const juce::ScopedLock sl (bufferLock);
+
+    if (! undoAvailable.load() || undoLen <= 0)
+        return false;
+
+    if (current != State::playing && current != State::stopped)
+        return false;
+
+    const int64_t len = juce::jmin<int64_t> (undoLen, (int64_t) undoBuffer.getNumSamples());
+    if (len <= 0)
+        return false;
+
+    for (int ch = 0; ch < 2; ++ch)
+        loopBuffer.copyFrom (ch, 0, undoBuffer, ch, 0, (int) len);
+
+    loopLen = len;
+    playPos = juce::jlimit<int64_t> (0, juce::jmax<int64_t> (0, loopLen - 1), playPos);
+    publishLengths();
+    rebuildWaveformLocked();
+    undoLen = 0;
+    undoAvailable.store (false);
+    revision.fetch_add (1);
+    waveformDirty.store (false);
+    return true;
+}
+
+bool Looper::copyLoopTo (juce::AudioBuffer<float>& dest, double& sampleRateOut)
+{
+    const juce::ScopedLock sl (bufferLock);
+
+    if (loopLen <= 0 || capacity <= 0)
+        return false;
+
+    if (current == State::recording || current == State::overdubbing
+        || current == State::extending || current == State::armingRecord)
+        return false;
+
+    dest.setSize (2, (int) loopLen, false, false, true);
+    for (int ch = 0; ch < 2; ++ch)
+        dest.copyFrom (ch, 0, loopBuffer, ch, 0, (int) loopLen);
+
+    sampleRateOut = sampleRate;
+    return true;
+}
+
 void Looper::discardRecording()
 {
     loopLen = 0;
@@ -151,8 +387,16 @@ void Looper::discardRecording()
     clearPending = false;
     armSamples = 0;
     fadeGain = 0.0f;
+    extOldLen = extEnd = extRecorded = 0;
+    extWasPlaying = false;
+    extendStartSeconds.store (0.0);
+    extendEndSeconds.store (0.0);
+    pendingExtendFrames.store (0);
     layers.store (0);
+    lengthSeconds.store (0.0);
+    loopBars.store (0.0);
     resetWaveform();
+    invalidateUndo();
     setCurrent (State::empty);
 }
 
@@ -165,6 +409,18 @@ void Looper::beginRecording (double bpm, int beatsPerBar)
     clearPending = false;
     layers.store (0);
     resetWaveform();
+    invalidateUndo();
+    pendingExtendFrames.store (0);
+    extOldLen = extEnd = extRecorded = 0;
+    extWasPlaying = false;
+    extendStartSeconds.store (0.0);
+    extendEndSeconds.store (0.0);
+    lengthSeconds.store (0.0);
+    loopBars.store (0.0);
+    loopFrames.store (0);
+    position.store (0.0);
+    loopId.fetch_add (1);
+
     recordBpm = bpm;
     recordBeatsPerBar = juce::jmax (1, beatsPerBar);
 
@@ -232,6 +488,11 @@ void Looper::finishRecording (int64_t wantedFrames, bool drumsOn)
     playPos = drumsOn && loopLen > 0 ? excess % loopLen : 0;
     fadeGain = 0.0f;
     closePending = false;
+
+    loopBpm.store (recordBpm);
+    loopBeatsPerBar.store (recordBeatsPerBar);
+    publishLengths();
+    revision.fetch_add (1);
     setCurrent (State::playing);
 
     // Close the envelope at the trimmed loop length, dropping peaks from the
@@ -245,11 +506,7 @@ void Looper::finishRecording (int64_t wantedFrames, bool drumsOn)
     const int wantedBuckets = (int) ((loopLen + bucketSamples - 1) / bucketSamples);
     waveformCount.store (juce::jlimit (0, juce::jmin (waveWrite, waveformBuckets), wantedBuckets),
                          std::memory_order_relaxed);
-
-    const double beats = (double) loopLen / sampleRate * recordBpm / 60.0;
-    lengthSeconds.store ((double) loopLen / sampleRate);
-    loopBpm.store (recordBpm);
-    loopBars.store (beats / (double) recordBeatsPerBar);
+    waveformDirty.store (false);
 }
 
 void Looper::startPlayback (int64_t fromFrame)
@@ -263,6 +520,8 @@ void Looper::startPlayback (int64_t fromFrame)
     playPos = fromFrame % loopLen;
     fadeGain = 0.0f;
     clearPending = false;
+    extendStartSeconds.store (0.0);
+    extendEndSeconds.store (0.0);
     setCurrent (State::playing);
 }
 
@@ -271,19 +530,35 @@ void Looper::handleToggle (bool drumsOn, int beatsPerBar, double bpm, double gri
     if (clearPending)
         return;
 
+    const double beatSamples = 60.0 / juce::jmax (1.0, bpm) * sampleRate;
+    auto scheduleArm = [this, beatSamples] (int64_t samples, State armed)
+    {
+        armSamples = juce::jmax<int64_t> (0, samples);
+        clickPhaseSamples = 0.0;
+        clickSamplesLeft = 0;
+        clickIndex = 0;
+        clickLengthSamples = (int) juce::jmax (64, (int) std::llround (0.020 * sampleRate));
+        const int total = armSamples > 0
+                              ? (int) std::ceil ((double) armSamples / beatSamples) : 0;
+        countInTotal.store (total);
+        countInRemaining.store (total);
+        setCurrent (armed);
+    };
+
     switch (current)
     {
         case State::empty:
-            if (drumsOn && quantise.load() != LoopQuantise::off)
-            {
-                armSamples = samplesToNextBoundary (gridBeats, beatsPerBar, bpm);
-                setCurrent (State::armingRecord);
-            }
+        {
+            const int64_t boundary = (drumsOn && quantise.load() != LoopQuantise::off)
+                                         ? samplesToNextBoundary (gridBeats, beatsPerBar, bpm) : 0;
+            const int64_t countIn = (int64_t) std::llround ((double) countInBeats.load() * beatSamples);
+            const int64_t total = boundary + countIn;
+            if (total > 0)
+                scheduleArm (total, State::armingRecord);
             else
-            {
                 beginRecording (bpm, beatsPerBar);
-            }
             break;
+        }
 
         case State::stopped:
             if (loopLen <= 0)
@@ -292,8 +567,11 @@ void Looper::handleToggle (bool drumsOn, int beatsPerBar, double bpm, double gri
             }
             else if (drumsOn && quantise.load() != LoopQuantise::off)
             {
-                armSamples = samplesToNextBoundary (gridBeats, beatsPerBar, bpm);
-                setCurrent (State::armingPlay);
+                const auto boundary = samplesToNextBoundary (gridBeats, beatsPerBar, bpm);
+                if (boundary > 0)
+                    scheduleArm (boundary, State::armingPlay);
+                else
+                    startPlayback (0);
             }
             else
             {
@@ -313,6 +591,8 @@ void Looper::handleToggle (bool drumsOn, int beatsPerBar, double bpm, double gri
             // Finishing an overdub is immediate: the loop itself does not change
             // length, so there is nothing to quantise.
             setCurrent (State::playing);
+            revision.fetch_add (1);
+            waveformDirty.store (true, std::memory_order_release);
             break;
 
         case State::armingRecord:
@@ -326,7 +606,85 @@ void Looper::handleToggle (bool drumsOn, int beatsPerBar, double bpm, double gri
         case State::armingPlay:
             setCurrent (State::stopped);
             break;
+
+        case State::extending:
+            cancelExtension (false);
+            break;
     }
+}
+
+// ---- extension --------------------------------------------------------------
+
+void Looper::startPendingExtension (int64_t addFrames, double bpm, int beatsPerBar)
+{
+    juce::ignoreUnused (beatsPerBar);
+
+    if (! (current == State::playing || current == State::stopped)
+        || addFrames <= 0 || loopLen <= 0 || loopLen + addFrames > (int64_t) capacity)
+    {
+        invalidateUndo();
+        return;
+    }
+
+    const double loopTempo = loopBpm.load() > 1.0 ? loopBpm.load() : bpm;
+    const int bpb = juce::jmax (1, loopBeatsPerBar.load());
+    const int64_t barSamples = juce::jmax<int64_t> (
+        1, (int64_t) std::llround (60.0 / juce::jmax (30.0, loopTempo) * (double) bpb * sampleRate));
+
+    extWasPlaying = current == State::playing;
+    extOldLen = loopLen;
+    extEnd = loopLen + addFrames;
+    extRecorded = 0;
+    loopLen = extEnd;
+
+    // Start one bar before the seam when possible, so the new section is
+    // played in context instead of out of nowhere.
+    const int64_t preRoll = juce::jmin (extOldLen, barSamples);
+    playPos = extOldLen - preRoll;
+    fadeGain = 1.0f;
+
+    extendStartSeconds.store ((double) extOldLen / sampleRate);
+    extendEndSeconds.store ((double) extEnd / sampleRate);
+    publishLengths();
+    setCurrent (State::extending);
+}
+
+void Looper::finishExtension()
+{
+    if (loopLen <= 0)
+    {
+        setCurrent (State::stopped);
+        return;
+    }
+
+    extRecorded = extEnd - extOldLen;
+    publishLengths();
+    setCurrent (State::playing);
+    waveformDirty.store (true, std::memory_order_release);
+    revision.fetch_add (1);
+}
+
+void Looper::cancelExtension (bool stopPlayback)
+{
+    if (loopLen <= 0)
+    {
+        setCurrent (stopPlayback ? State::stopped : State::empty);
+        return;
+    }
+
+    loopLen = extOldLen;
+    if (loopLen <= 0)
+        loopLen = 1;
+
+    if (playPos >= loopLen)
+        playPos = 0;
+
+    extendStartSeconds.store (0.0);
+    extendEndSeconds.store (0.0);
+    publishLengths();
+    invalidateUndo();
+
+    setCurrent (stopPlayback ? State::stopped : (extWasPlaying ? State::playing : State::stopped));
 }
 
 // ---- audio ------------------------------------------------------------------
@@ -336,10 +694,20 @@ void Looper::render (float* left, float* right, int numSamples, const DrumMachin
     if (! enabled || numSamples <= 0 || captured < numSamples)
         return;
 
+    // Edits happen on the message thread. Never block the audio thread for
+    // them: if an edit is in progress, skip this block of loop processing.
+    const juce::CriticalSection::ScopedTryLockType tryLock (bufferLock);
+    if (! tryLock.isLocked())
+    {
+        captured = 0;
+        return;
+    }
+
     const bool drumsOn = drums.isPlaying();
     const int beatsPerBar = juce::jlimit (1, 12, drums.getGridBeatsPerBar());
     const double bpm = juce::jlimit (30.0, 300.0, (double) HostTempo::bpm.load());
     const double beatsPerSample = (bpm / 60.0) / sampleRate;
+    const double beatSamples = 60.0 / bpm * sampleRate;
     const double gridBeats = drumsOn ? drums.getGridBeatsAtBlockStart() : freeBeats;
     const int64_t unit = unitSamples (beatsPerBar, bpm);
     const float outLevel = juce::Decibels::decibelsToGain (levelDb.load(), -60.0f);
@@ -347,6 +715,12 @@ void Looper::render (float* left, float* right, int numSamples, const DrumMachin
     // ---- commands at the start of the block --------------------------------
     if (clearRequested.exchange (false, std::memory_order_acq_rel))
     {
+        if (pendingExtendFrames.exchange (0) > 0)
+            invalidateUndo();
+
+        if (current == State::extending)
+            cancelExtension (false);
+
         if (current == State::recording || current == State::armingRecord || loopLen <= 0)
         {
             discardRecording();
@@ -356,17 +730,24 @@ void Looper::render (float* left, float* right, int numSamples, const DrumMachin
             // Let the loop fade out, then erase it in the sample loop.
             setCurrent (State::stopped);
             clearPending = true;
+            invalidateUndo();
         }
     }
 
     if (stopRequested.exchange (false, std::memory_order_acq_rel))
     {
         clearPending = false;
+        if (pendingExtendFrames.exchange (0) > 0)
+            invalidateUndo();
         switch (current)
         {
             case State::recording:
             case State::armingRecord:
                 discardRecording();
+                break;
+
+            case State::extending:
+                cancelExtension (true);
                 break;
 
             case State::playing:
@@ -384,6 +765,27 @@ void Looper::render (float* left, float* right, int numSamples, const DrumMachin
     if (toggleRequested.exchange (false, std::memory_order_acq_rel))
         handleToggle (drumsOn, beatsPerBar, bpm, gridBeats, unit);
 
+    // A queued seek moves the playhead without changing the transport state.
+    const double seekSeconds = seekRequest.exchange (-1.0, std::memory_order_acq_rel);
+    if (seekSeconds >= 0.0 && loopLen > 0
+        && (current == State::playing || current == State::stopped))
+    {
+        playPos = juce::jlimit<int64_t> (0, loopLen - 1,
+                                         (int64_t) std::llround (seekSeconds * sampleRate)) % loopLen;
+        position.store (loopLen > 0 ? (double) playPos / (double) loopLen : 0.0,
+                        std::memory_order_relaxed);
+    }
+
+    // A queued edit grows the loop and starts recording at the seam.
+    const int64_t extendFrames = pendingExtendFrames.exchange (0, std::memory_order_acq_rel);
+    if (extendFrames > 0)
+    {
+        if (! clearPending && (current == State::playing || current == State::stopped))
+            startPendingExtension (extendFrames, bpm, beatsPerBar);
+        else
+            invalidateUndo();
+    }
+
     // ---- per-sample ---------------------------------------------------------
     const float* inL = inputBuffer.getReadPointer (0);
     const float* inR = inputBuffer.getReadPointer (1);
@@ -391,6 +793,7 @@ void Looper::render (float* left, float* right, int numSamples, const DrumMachin
     float* bufR = loopBuffer.getWritePointer (1);
     const float fadeCoef = 1.0f - std::exp (-1.0f / (float) juce::jmax (1.0, 0.005 * sampleRate));
     const int bucketSamples = juce::jmax (1, waveformBucketSamples.load (std::memory_order_relaxed));
+    const int clickBeatsPerBar = juce::jmax (1, beatsPerBar);
 
     for (int i = 0; i < numSamples; ++i)
     {
@@ -412,6 +815,21 @@ void Looper::render (float* left, float* right, int numSamples, const DrumMachin
         // Start a queued action on the musical boundary.
         if (current == State::armingRecord || current == State::armingPlay)
         {
+            // A soft click makes the count-in usable without the drum machine;
+            // if the drums are running they already provide the beat.
+            if (! drumsOn && clickLengthSamples > 0)
+            {
+                clickPhaseSamples += 1.0;
+                if (clickPhaseSamples >= beatSamples)
+                {
+                    clickPhaseSamples -= beatSamples;
+                    clickSamplesLeft = clickLengthSamples;
+                    clickAngle = 0.0;
+                    clickFreq = (clickIndex % clickBeatsPerBar == 0) ? 1800.0f : 1200.0f;
+                    ++clickIndex;
+                }
+            }
+
             if (armSamples <= 0)
             {
                 if (current == State::armingRecord)
@@ -425,6 +843,17 @@ void Looper::render (float* left, float* right, int numSamples, const DrumMachin
             }
         }
 
+        // Count-in click envelope.
+        if (clickSamplesLeft > 0)
+        {
+            const float env = (float) clickSamplesLeft / (float) juce::jmax (1, clickLengthSamples);
+            const float s = (float) std::sin (clickAngle) * env * 0.20f;
+            left[i] += s;
+            right[i] += s;
+            clickAngle += juce::MathConstants<double>::twoPi * (double) clickFreq / sampleRate;
+            --clickSamplesLeft;
+        }
+
         if (clearPending && loopLen > 0 && fadeGain <= 1.0e-4f)
         {
             loopLen = 0;
@@ -434,13 +863,16 @@ void Looper::render (float* left, float* right, int numSamples, const DrumMachin
             lengthSeconds.store (0.0);
             loopBpm.store (0.0);
             loopBars.store (0.0);
+            loopFrames.store (0);
             setCurrent (State::empty);
             clearPending = false;
+            revision.fetch_add (1);
         }
 
         const bool activePlayback = current == State::playing
                                     || current == State::armedOverdub
-                                    || current == State::overdubbing;
+                                    || current == State::overdubbing
+                                    || current == State::extending;
         const int64_t p = playPos;
 
         // Loop playback (also runs while fading out after a stop).
@@ -477,11 +909,22 @@ void Looper::render (float* left, float* right, int numSamples, const DrumMachin
             bufL[p] = juce::jlimit (-2.0f, 2.0f, bufL[p] + inL[i] * 0.85f);
             bufR[p] = juce::jlimit (-2.0f, 2.0f, bufR[p] + inR[i] * 0.85f);
         }
+        else if (current == State::extending)
+        {
+            // The first pass through the new bars records the live input.
+            if (p >= extOldLen && p < extEnd)
+            {
+                bufL[p] = inL[i];
+                bufR[p] = inR[i];
+                ++extRecorded;
+            }
+        }
 
         // Advance the playhead and switch from armed overdub at the loop seam.
         if (loopLen > 0
             && (current == State::playing || current == State::armedOverdub
-                || current == State::overdubbing || fadeGain > 1.0e-4f))
+                || current == State::overdubbing || current == State::extending
+                || fadeGain > 1.0e-4f))
         {
             ++playPos;
             if (playPos >= loopLen)
@@ -491,6 +934,11 @@ void Looper::render (float* left, float* right, int numSamples, const DrumMachin
                 {
                     setCurrent (State::overdubbing);
                     layers.store (layers.load() + 1);
+                    invalidateUndo();   // the undo snapshot no longer matches
+                }
+                else if (current == State::extending)
+                {
+                    finishExtension();
                 }
             }
         }
@@ -513,6 +961,13 @@ void Looper::render (float* left, float* right, int numSamples, const DrumMachin
     position.store (loopLen > 0 ? (double) playPos / (double) loopLen : 0.0,
                     std::memory_order_relaxed);
     recordedSeconds.store ((double) recordFrames / sampleRate, std::memory_order_relaxed);
+
+    if (current == State::armingRecord || current == State::armingPlay)
+    {
+        const int remaining = armSamples > 0
+                                  ? (int) std::ceil ((double) armSamples / beatSamples) : 0;
+        countInRemaining.store (remaining, std::memory_order_relaxed);
+    }
 
     if (drumsOn)
         freeBeats = drums.getGridBeatsAtBlockStart() + (double) numSamples * beatsPerSample;
