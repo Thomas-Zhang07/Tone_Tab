@@ -1,4 +1,5 @@
 #include "LoopPanel.h"
+#include "looper/LoopStore.h"
 #include "Text.h"
 #include <cmath>
 
@@ -29,11 +30,16 @@ namespace
     juce::String barsText (double bars)
     {
         if (bars <= 0.0)
-            return {};
+            return TR ("0 bars", "0 小节");
 
-        if (std::abs (bars - std::round (bars)) < 0.02)
+        if (std::abs (bars - std::round (bars)) < 0.01)
             return juce::String ((int) std::lround (bars)) + TR (" bars", " 小节");
         return juce::String (bars, 2) + TR (" bars", " 小节");
+    }
+
+    juce::String timeText (double seconds)
+    {
+        return juce::String (seconds, 2) + " s";
     }
 }
 
@@ -41,6 +47,7 @@ LoopPanel::LoopPanel (Looper& l, DrumMachine& d, juce::PropertiesFile& s)
     : looper (l), drums (d), settings (s)
 {
     setWantsKeyboardFocus (true);
+    setOpaque (true);
 
     title.setText (TR ("Loop Station", "循环站"), juce::dontSendNotification);
     title.setFont (juce::FontOptions (21.0f, juce::Font::bold));
@@ -72,8 +79,40 @@ LoopPanel::LoopPanel (Looper& l, DrumMachine& d, juce::PropertiesFile& s)
     clearButton.onClick = [this] { looper.clear(); grabKeyboardFocus(); };
     addAndMakeVisible (clearButton);
 
-    // ---- grid / length / level ---------------------------------------------
-    styleLabel (tempoLabel, 13.0f, muted);
+    undoButton.setButtonText (TR ("Undo", "撤销"));
+    undoButton.setTooltip (TR ("Undo the last trim or extension.", "撤销上一次裁剪或延长"));
+    noKeyboardFocus (undoButton);
+    undoButton.onClick = [this] { undoEdit(); grabKeyboardFocus(); };
+    addAndMakeVisible (undoButton);
+
+    // ---- selection / editing -----------------------------------------------
+    styleLabel (selectionLabel, 12.5f, juce::Colours::white.withAlpha (0.8f));
+    selectionLabel.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (selectionLabel);
+
+    trimButton.setButtonText (TR ("Trim to selection", "裁剪到选区"));
+    trimButton.setTooltip (TR ("Keep only the highlighted part of the loop.",
+                               "只保留波形上高亮的部分"));
+    noKeyboardFocus (trimButton);
+    trimButton.onClick = [this] { trimSelection(); grabKeyboardFocus(); };
+    addAndMakeVisible (trimButton);
+
+    // ---- grid / length / count-in / level ----------------------------------
+    styleLabel (quantiseLabel, 12.5f, muted);
+    quantiseLabel.setText (TR ("Snap to", "对齐到"), juce::dontSendNotification);
+    addAndMakeVisible (quantiseLabel);
+
+    quantiseBox.addItem (TR ("Bar (recommended)", "小节（推荐）"), 1);
+    quantiseBox.addItem (TR ("Beat", "拍"), 2);
+    quantiseBox.addItem (TR ("Off — free timing", "关 — 自由时间"), 3);
+    quantiseBox.setTooltip (TR ("Start, close, trim and count-in land on the nearest bar. "
+                                "You do not have to hit SPACE exactly on time.",
+                                "开始、结束、裁剪和预备拍都会落在最近的小节线上，空格按早晚一点都没关系"));
+    noKeyboardFocus (quantiseBox);
+    quantiseBox.onChange = [this] { applyQuantise(); saveSettings(); grabKeyboardFocus(); };
+    addAndMakeVisible (quantiseBox);
+
+    styleLabel (tempoLabel, 12.5f, muted);
     tempoLabel.setText (TR ("Tempo (shared with the drum machine)", "速度（与鼓机共用）"),
                         juce::dontSendNotification);
     addAndMakeVisible (tempoLabel);
@@ -86,39 +125,55 @@ LoopPanel::LoopPanel (Looper& l, DrumMachine& d, juce::PropertiesFile& s)
     tempoSlider.setTooltip (TR ("The loop snaps to this tempo, with or without drums",
                                 "循环会按这个速度对齐，开不开鼓机都一样"));
     noKeyboardFocus (tempoSlider);
-    tempoSlider.onValueChange = [this] { drums.setBpm ((float) tempoSlider.getValue()); };
-    tempoSlider.onDragEnd = [this] { save(); grabKeyboardFocus(); };
+    tempoSlider.onValueChange = [this]
+    {
+        drums.setBpm ((float) tempoSlider.getValue());
+        updateLengthHint();
+    };
+    tempoSlider.onDragEnd = [this] { saveSettings(); grabKeyboardFocus(); };
     addAndMakeVisible (tempoSlider);
 
-    styleLabel (quantiseLabel, 13.0f, muted);
-    quantiseLabel.setText (TR ("Snap to", "对齐到"), juce::dontSendNotification);
-    addAndMakeVisible (quantiseLabel);
-
-    quantiseBox.addItem (TR ("Bar (recommended)", "小节（推荐）"), 1);
-    quantiseBox.addItem (TR ("Beat", "拍"), 2);
-    quantiseBox.addItem (TR ("Off — free timing", "关 — 自由时间"), 3);
-    quantiseBox.setTooltip (TR ("Start and close land on the nearest bar. You do not have to hit SPACE exactly on time.",
-                                "开始和结束都会自动落在最近的小节线上，空格按早晚一点都没关系"));
-    noKeyboardFocus (quantiseBox);
-    quantiseBox.onChange = [this] { applyQuantise(); save(); grabKeyboardFocus(); };
-    addAndMakeVisible (quantiseBox);
-
-    styleLabel (lengthLabel, 13.0f, muted);
+    styleLabel (lengthLabel, 12.5f, muted);
     lengthLabel.setText (TR ("New loop length", "新循环长度"), juce::dontSendNotification);
     addAndMakeVisible (lengthLabel);
 
+    lengthBox.clear (juce::dontSendNotification);
     lengthBox.addItem (TR ("Auto — press again to close", "自动 — 再按一次结束"), 1);
-    lengthBox.addItem (TR ("1 bar", "1 小节"), 2);
-    lengthBox.addItem (TR ("2 bars", "2 小节"), 3);
-    lengthBox.addItem (TR ("4 bars", "4 小节"), 4);
-    lengthBox.addItem (TR ("8 bars", "8 小节"), 5);
-    lengthBox.setTooltip (TR ("With a fixed length, one press records exactly that long and starts looping by itself.",
-                              "固定长度时，只需按一次空格，录完自动开始循环"));
+    for (int bar = 1; bar <= 64; ++bar)
+        lengthBox.addItem (juce::String (bar) + TR (" bars", " 小节"), bar + 1);
+    lengthBox.setTooltip (TR ("Every whole number of bars is available. A fixed length "
+                              "records with one press and starts looping by itself.",
+                              "所有整数小节都可以。固定长度时只需按一次空格，录完自动开始循环"));
     noKeyboardFocus (lengthBox);
-    lengthBox.onChange = [this] { applyFixedLength(); save(); grabKeyboardFocus(); };
+    lengthBox.onChange = [this] { applyFixedLength(); saveSettings(); grabKeyboardFocus(); };
     addAndMakeVisible (lengthBox);
 
-    styleLabel (levelLabel, 13.0f, muted);
+    styleLabel (lengthHint, 11.0f, muted);
+    lengthHint.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (lengthHint);
+
+    styleLabel (countInLabel, 12.5f, muted);
+    countInLabel.setText (TR ("Count-in before recording", "录音前的预备拍"),
+                          juce::dontSendNotification);
+    addAndMakeVisible (countInLabel);
+
+    countInSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    countInSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 74, 22);
+    countInSlider.setRange (0.0, 32.0, 1.0);
+    countInSlider.textFromValueFunction = [] (double v)
+    {
+        const int n = (int) std::lround (v);
+        return juce::String (n) + (n == 1 ? TR (" beat", " 拍") : TR (" beats", " 拍"));
+    };
+    countInSlider.setTooltip (TR ("How many beats are counted before recording starts. "
+                                  "The number is shown in the middle of the timeline.",
+                                  "录音开始前数多少拍，数字会显示在时间线中间"));
+    noKeyboardFocus (countInSlider);
+    countInSlider.onValueChange = [this] { applyCountIn(); };
+    countInSlider.onDragEnd = [this] { saveSettings(); grabKeyboardFocus(); };
+    addAndMakeVisible (countInSlider);
+
+    styleLabel (levelLabel, 12.5f, muted);
     levelLabel.setText (TR ("Loop level", "循环音量"), juce::dontSendNotification);
     addAndMakeVisible (levelLabel);
 
@@ -129,36 +184,123 @@ LoopPanel::LoopPanel (Looper& l, DrumMachine& d, juce::PropertiesFile& s)
     levelSlider.setDoubleClickReturnValue (true, -3.0);
     noKeyboardFocus (levelSlider);
     levelSlider.onValueChange = [this] { looper.setLevelDb ((float) levelSlider.getValue()); };
-    levelSlider.onDragEnd = [this] { save(); grabKeyboardFocus(); };
+    levelSlider.onDragEnd = [this] { saveSettings(); grabKeyboardFocus(); };
     addAndMakeVisible (levelSlider);
 
-    // ---- restore settings ---------------------------------------------------
+    // ---- continue / extend ---------------------------------------------------
+    styleLabel (continueLabel, 11.0f, juce::Colours::white.withAlpha (0.55f));
+    continueLabel.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    continueLabel.setText (TR ("CONTINUE LOOP  ·  BARS TO ADD", "延长循环  ·  增加小节数"),
+                           juce::dontSendNotification);
+    addAndMakeVisible (continueLabel);
+
+    extendBarsSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    extendBarsSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 60, 22);
+    extendBarsSlider.setRange (1.0, 64.0, 1.0);
+    extendBarsSlider.setTooltip (TR ("Any whole number of bars. The loop keeps playing, "
+                                     "and the new bars are recorded when the playhead reaches the end.",
+                                     "可以填任意整数小节。循环会继续播放，播放头到结尾时开始录制新增的小节"));
+    noKeyboardFocus (extendBarsSlider);
+    extendBarsSlider.onValueChange = [this] { applyExtendBars(); };
+    extendBarsSlider.onDragEnd = [this] { saveSettings(); grabKeyboardFocus(); };
+    addAndMakeVisible (extendBarsSlider);
+
+    extendButton.setButtonText (TR ("Extend & record", "延长并录音"));
+    extendButton.setTooltip (TR ("Adds the bars above and records them live at the end of the loop.",
+                                 "增加上面的小节数，并在循环结尾实时录制"));
+    noKeyboardFocus (extendButton);
+    extendButton.onClick = [this] { extendLoop(); grabKeyboardFocus(); };
+    addAndMakeVisible (extendButton);
+
+    // ---- save & notes --------------------------------------------------------
+    styleLabel (notesLabel, 11.0f, juce::Colours::white.withAlpha (0.55f));
+    notesLabel.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    notesLabel.setText (TR ("SAVE & NOTES", "保存与备注"), juce::dontSendNotification);
+    addAndMakeVisible (notesLabel);
+
+    notesEditor.setMultiLine (true, true);
+    notesEditor.setReturnKeyStartsNewLine (true);
+    notesEditor.setScrollbarsShown (true);
+    notesEditor.setFont (juce::FontOptions (13.0f));
+    notesEditor.setColour (juce::TextEditor::backgroundColourId, juce::Colour (0xff101010));
+    notesEditor.setColour (juce::TextEditor::textColourId, juce::Colours::white.withAlpha (0.85f));
+    notesEditor.setColour (juce::TextEditor::outlineColourId, panelLine);
+    notesEditor.setColour (juce::TextEditor::focusedOutlineColourId, accent);
+    notesEditor.setTextToShowWhenEmpty (TR ("Notes for this loop…", "给这个循环写点备注…"), muted);
+    notesEditor.onTextChange = [this]
+    {
+        if (updatingNotes)
+            return;
+        notesDirty = true;
+        notesDirtyAt = juce::Time::getMillisecondCounterHiRes() * 0.001;
+    };
+    addAndMakeVisible (notesEditor);
+
+    saveButton.setButtonText (TR ("Save loop", "保存循环"));
+    saveButton.setTooltip (TR ("Writes loop.wav and loop.json (with these notes) to the loops folder.",
+                               "把 loop.wav 和 loop.json（连同备注）写到 loops 文件夹"));
+    noKeyboardFocus (saveButton);
+    saveButton.onClick = [this] { saveLoop(); grabKeyboardFocus(); };
+    addAndMakeVisible (saveButton);
+
+    openFolderButton.setButtonText (TR ("Loops folder", "loops 文件夹"));
+    openFolderButton.setTooltip (TR ("Open the folder containing saved loops.",
+                                     "打开保存循环的文件夹"));
+    noKeyboardFocus (openFolderButton);
+    openFolderButton.onClick = [this] { openLoopsFolder(); grabKeyboardFocus(); };
+    addAndMakeVisible (openFolderButton);
+
+    styleLabel (savedLabel, 11.5f, muted);
+    savedLabel.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (savedLabel);
+
+    // ---- restore settings ----------------------------------------------------
     quantiseBox.setSelectedId (juce::jlimit (1, 3, settings.getIntValue ("loopQuantise", 1)),
                                juce::dontSendNotification);
     applyQuantise();
 
-    const int fixedBars = settings.getIntValue ("loopFixedBars", 0);
-    lengthBox.setSelectedId (fixedBars == 1 ? 2 : fixedBars == 2 ? 3
-                             : fixedBars == 4 ? 4 : fixedBars == 8 ? 5 : 1,
-                             juce::dontSendNotification);
+    const int fixedBars = juce::jlimit (0, 64, settings.getIntValue ("loopFixedBars", 0));
+    lengthBox.setSelectedId (juce::jlimit (1, 65, fixedBars + 1), juce::dontSendNotification);
     applyFixedLength();
+
+    countInSlider.setValue (juce::jlimit (0, 32, settings.getIntValue ("loopCountIn", 0)),
+                            juce::dontSendNotification);
+    applyCountIn();
+
+    extendBarsSlider.setValue (juce::jlimit (1, 64, settings.getIntValue ("loopExtendBars", 1)),
+                               juce::dontSendNotification);
+    applyExtendBars();
 
     levelSlider.setValue (settings.getDoubleValue ("loopLevelDb", -3.0), juce::dontSendNotification);
     looper.setLevelDb ((float) levelSlider.getValue());
 
-    hintText = TR ("SPACE: record, close the loop, then overdub. Start and close snap to the bar, "
-                   "so a late or early press still makes a tight loop.  ESC stops.  Max 30 s.",
-                   "空格：录音 → 结束循环 → 叠加录音。开始和结束都会自动对齐小节，"
-                   "按早按晚都能得到干净的循环。Esc 停止。最长 30 秒。");
+    updatingNotes = true;
+    notesEditor.setText (settings.getValue ("loopNotes"), false);
+    updatingNotes = false;
+
+    savedLabel.setText (TR ("Not saved yet", "还没保存"), juce::dontSendNotification);
 
     updateControls();
     refresh();
+    updateLengthHint();
     startTimerHz (30);
 }
 
 LoopPanel::~LoopPanel()
 {
     stopTimer();
+    saveSettings();
+}
+
+void LoopPanel::saveSettings()
+{
+    settings.setValue ("loopQuantise", quantiseBox.getSelectedId());
+    settings.setValue ("loopFixedBars", looper.getFixedLengthBars());
+    settings.setValue ("loopCountIn", looper.getCountInBeats());
+    settings.setValue ("loopLevelDb", levelSlider.getValue());
+    settings.setValue ("loopExtendBars", (int) std::lround (extendBarsSlider.getValue()));
+    settings.setValue ("loopNotes", notesEditor.getText());
+    settings.setValue ("drumBpm", drums.getBpm());
 }
 
 void LoopPanel::applyQuantise()
@@ -173,28 +315,56 @@ void LoopPanel::applyQuantise()
 
 void LoopPanel::applyFixedLength()
 {
-    static const int barsForId[] = { 0, 1, 2, 4, 8 };   // id 1 = auto
-    const int id = juce::jlimit (1, 5, lengthBox.getSelectedId());
-    looper.setFixedLengthBars (barsForId[id - 1]);
+    looper.setFixedLengthBars (juce::jlimit (0, 64, lengthBox.getSelectedId() - 1));
+    updateLengthHint();
 }
 
-void LoopPanel::save()
+void LoopPanel::applyCountIn()
 {
-    settings.setValue ("loopQuantise", quantiseBox.getSelectedId());
-    settings.setValue ("loopFixedBars", looper.getFixedLengthBars());
-    settings.setValue ("loopLevelDb", levelSlider.getValue());
-    settings.setValue ("drumBpm", drums.getBpm());
+    looper.setCountInBeats ((int) std::lround (countInSlider.getValue()));
 }
 
-void LoopPanel::toggleLoop()
+void LoopPanel::applyExtendBars()
 {
-    looper.toggle();
+    // The slider range already enforces 1..64; nothing else to store.
+    updateControls();
 }
 
-void LoopPanel::stopLoop()
+void LoopPanel::updateLengthHint()
 {
-    looper.stop();
+    const double bpm = juce::jmax (30.0, (double) drums.getBpm());
+    const int bpb = juce::jmax (1, drums.getGridBeatsPerBar());
+    const double barSecs = 60.0 / bpm * (double) bpb;
+    const int maxBars = juce::jlimit (1, 64,
+                                      (int) std::floor (Looper::getMaxSeconds() / barSecs + 1.0e-6));
+    const int chosen = looper.getFixedLengthBars();
+
+    juce::String text;
+    juce::Colour colour = muted;
+
+    if (chosen > maxBars)
+    {
+        text = TR ("At this tempo the 2:00 buffer holds about ", "这个速度下 2:00 的缓冲区大约能放 ")
+               + juce::String (maxBars) + TR (" bars; longer takes stop at the end.",
+                                               " 小节，更长会截断。");
+        colour = amber;
+    }
+    else
+    {
+        text = TR ("1–64 bars. At this tempo up to ", "1–64 小节。这个速度下最多 ")
+               + juce::String (maxBars) + TR (" bars fit in the 2:00 buffer.",
+                                               " 小节（2:00 缓冲区）。");
+    }
+
+    if (lengthHint.getText() != text)
+    {
+        lengthHint.setText (text, juce::dontSendNotification);
+        lengthHint.setColour (juce::Label::textColourId, colour);
+    }
 }
+
+void LoopPanel::toggleLoop()   { looper.toggle(); }
+void LoopPanel::stopLoop()     { looper.stop(); }
 
 bool LoopPanel::keyPressed (const juce::KeyPress& key)
 {
@@ -213,6 +383,25 @@ bool LoopPanel::keyPressed (const juce::KeyPress& key)
     if (key == juce::KeyPress::escapeKey)
     {
         stopLoop();
+        return true;
+    }
+
+    const auto ch = key.getTextCharacter();
+    if (ch == 'u' || ch == 'U')
+    {
+        undoEdit();
+        return true;
+    }
+
+    if (ch == 't' || ch == 'T')
+    {
+        trimSelection();
+        return true;
+    }
+
+    if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)
+    {
+        clearSelection();
         return true;
     }
 
@@ -237,49 +426,81 @@ void LoopPanel::resized()
 {
     auto area = getLocalBounds().reduced (16);
 
-    auto header = area.removeFromTop (40);
-    title.setBounds (header.removeFromLeft (230));
-    status.setBounds (header);
+    headerArea = area.removeFromTop (34);
+    title.setBounds (headerArea.removeFromLeft (240));
+    status.setBounds (headerArea);
 
     area.removeFromTop (6);
-    hintArea = area.removeFromBottom (46);
-    area.removeFromBottom (8);
+    hintArea = area.removeFromBottom (38);
+    area.removeFromBottom (6);
 
-    controlsArea = area.removeFromRight (340);
-    area.removeFromRight (16);
-    loopDisplay = area;
+    controlsArea = area.removeFromRight (372);
+    area.removeFromRight (14);
 
+    transportArea = area.removeFromTop (58);
+    area.removeFromTop (8);
+    editArea = area.removeFromBottom (52);
+    area.removeFromBottom (6);
+    timelineArea = area;
+
+    // Transport row.
     {
-        auto display = loopDisplay.reduced (8);
-        timelineArea = display.removeFromBottom (176);
-        display.removeFromBottom (6);
-        ringArea = display;
+        auto t = transportArea.reduced (0, 7);
+        mainButton.setBounds (t.removeFromLeft (280));
+        t.removeFromLeft (10);
+        stopButton.setBounds (t.removeFromLeft (78));
+        t.removeFromLeft (8);
+        clearButton.setBounds (t.removeFromLeft (78));
+        t.removeFromLeft (8);
+        undoButton.setBounds (t.removeFromLeft (86));
     }
 
-    auto c = controlsArea.reduced (16);
-
-    auto addControl = [&c] (juce::Label& label, juce::Component& control, int height)
+    // Selection / trim row.
     {
-        label.setBounds (c.removeFromTop (18));
-        control.setBounds (c.removeFromTop (height));
+        auto e = editArea;
+        selectionLabel.setBounds (e.removeFromLeft (juce::jmax (180, e.getWidth() - 156)));
+        e.removeFromLeft (10);
+        trimButton.setBounds (e.removeFromLeft (juce::jmin (136, juce::jmax (90, e.getWidth()))));
+    }
+
+    // Right-hand controls.
+    {
+        auto c = controlsArea.reduced (14);
+        auto addControl = [&c] (juce::Label& label, juce::Component& control, int height)
+        {
+            label.setBounds (c.removeFromTop (17));
+            control.setBounds (c.removeFromTop (height));
+            c.removeFromTop (9);
+        };
+
+        addControl (quantiseLabel, quantiseBox, 27);
+        addControl (tempoLabel, tempoSlider, 26);
+        addControl (lengthLabel, lengthBox, 27);
+        lengthHint.setBounds (c.removeFromTop (30));
+        c.removeFromTop (4);
+        addControl (countInLabel, countInSlider, 26);
+        addControl (levelLabel, levelSlider, 26);
+
+        c.removeFromTop (2);
+        continueLabel.setBounds (c.removeFromTop (18));
+        auto extendRow = c.removeFromTop (30);
+        extendBarsSlider.setBounds (extendRow.removeFromLeft (156));
+        extendRow.removeFromLeft (8);
+        extendButton.setBounds (extendRow);
         c.removeFromTop (12);
-    };
 
-    auto buttons = c.removeFromBottom (104);
-    mainButton.setBounds (buttons.removeFromTop (54));
-    buttons.removeFromTop (8);
-    const int half = (buttons.getWidth() - 8) / 2;
-    stopButton.setBounds (buttons.removeFromLeft (half));
-    buttons.removeFromLeft (8);
-    clearButton.setBounds (buttons.removeFromLeft (half));
+        notesLabel.setBounds (c.removeFromTop (18));
+        notesArea = c.removeFromTop (juce::jmax (80, juce::jmin (128, c.getHeight() - 96)));
+        notesEditor.setBounds (notesArea);
+        c.removeFromTop (8);
 
-    addControl (tempoLabel, tempoSlider, 26);
-    addControl (quantiseLabel, quantiseBox, 28);
-    addControl (lengthLabel, lengthBox, 28);
-    addControl (levelLabel, levelSlider, 26);
-
-    c.removeFromBottom (6);
-    tipsArea = c;
+        auto saveRow = c.removeFromTop (30);
+        saveButton.setBounds (saveRow.removeFromLeft (116));
+        saveRow.removeFromLeft (8);
+        openFolderButton.setBounds (saveRow);
+        c.removeFromTop (6);
+        savedLabel.setBounds (c.removeFromTop (20));
+    }
 }
 
 // ---- paint ------------------------------------------------------------------
@@ -294,6 +515,7 @@ juce::Colour LoopPanel::stateColour (Looper::State s)
         case Looper::State::playing:        return accent;
         case Looper::State::armedOverdub:
         case Looper::State::overdubbing:    return blue;
+        case Looper::State::extending:      return blue;
         case Looper::State::stopped:        return muted;
         case Looper::State::empty:
         default:                            return juce::Colour (0xff6f6f6f);
@@ -305,7 +527,7 @@ void LoopPanel::paint (juce::Graphics& g)
     g.fillAll (bg);
 
     g.setColour (panel);
-    g.fillRoundedRectangle (loopDisplay.toFloat().expanded (8.0f), 12.0f);
+    g.fillRoundedRectangle (timelineArea.toFloat().expanded (8.0f), 12.0f);
     g.fillRoundedRectangle (controlsArea.toFloat().expanded (8.0f), 12.0f);
 
     g.setColour (panelLine);
@@ -313,138 +535,126 @@ void LoopPanel::paint (juce::Graphics& g)
                 (float) hintArea.getRight(), (float) hintArea.getY() - 2.0f, 1.0f);
 
     g.setColour (muted);
-    g.setFont (juce::FontOptions (12.5f));
-    g.drawFittedText (hintText, hintArea, juce::Justification::topLeft, 2);
+    g.setFont (juce::FontOptions (12.0f));
+    g.drawFittedText (TR ("SPACE records / closes / overdubs.  Drag the waveform to select, then Trim.  "
+                          "Count-in beats are shown in the middle before recording.  Extend records extra "
+                          "bars at the end.  U undo · T trim · Delete clears the selection.",
+                          "空格录音 / 结束 / 叠加。在波形上拖动选区，然后裁剪。录音前中间会显示预备拍数。"
+                          "延长会在结尾录制新增小节。U 撤销 · T 裁剪 · Delete 清除选区。"),
+                      hintArea, juce::Justification::topLeft, 2);
 
-    // Tips: the timing guarantees, spelled out where they matter.
-    if (tipsArea.getHeight() > 60)
-    {
-        auto t = tipsArea;
-        g.setColour (juce::Colours::white.withAlpha (0.55f));
-        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-        g.drawText (TR ("TIMING", "时间对齐"), t.removeFromTop (18), juce::Justification::topLeft);
-
-        g.setColour (muted);
-        g.setFont (juce::FontOptions (12.0f));
-        const juce::StringArray tips {
-            TR ("Close early → it keeps recording to the bar.",
-                "按早就继续录到小节线。"),
-            TR ("Close late → it trims back to the bar.",
-                "按晚就自动修剪回小节线。"),
-            TR ("Drums running → the loop starts on the next drum bar.",
-                "鼓机在放 → 循环从下一小节开始。"),
-            TR ("SPACE while playing adds another layer.",
-                "循环中按空格可以继续叠加。")
-        };
-
-        for (int i = 0; i < tips.size() && t.getHeight() > 16; ++i)
-        {
-            auto row = t.removeFromTop (22);
-            g.setColour (i == 0 ? accent : muted);
-            g.fillEllipse ((float) row.getX(), (float) row.getCentreY() - 1.5f, 3.0f, 3.0f);
-            g.setColour (muted);
-            g.drawFittedText (tips[i], row.withTrimmedLeft (10), juce::Justification::centredLeft, 1);
-        }
-    }
-
-    paintLoopDisplay (g, ringArea);
-    paintTimeline (g, timelineArea);
+    paintTimeline (g, timelineArea.reduced (10));
 }
 
 void LoopPanel::paintTimeline (juce::Graphics& g, juce::Rectangle<int> area)
 {
-    if (area.getWidth() < 160 || area.getHeight() < 80)
+    if (area.getWidth() < 240 || area.getHeight() < 120)
         return;
 
     const auto st = looper.getState();
-    const auto colour = stateColour (st);
     const bool hasLoop = looper.hasLoop();
-    const int bpb = juce::jmax (1, drums.getGridBeatsPerBar());
-    const double fallbackBpm = juce::jlimit (30.0, 300.0, (double) drums.getBpm());
-    const double loopBpm = looper.getLoopBpm() > 1.0 ? looper.getLoopBpm() : fallbackBpm;
-    const double bpm = hasLoop && st != Looper::State::recording
-                           && st != Looper::State::armingRecord
-                       ? loopBpm : fallbackBpm;
+    const auto colour = stateColour (st);
+    const int bpb = hasLoop ? juce::jmax (1, looper.getLoopBeatsPerBar())
+                            : juce::jmax (1, drums.getGridBeatsPerBar());
+    const double bpm = hasLoop && looper.getLoopBpm() > 1.0
+                           ? looper.getLoopBpm() : juce::jmax (30.0, (double) drums.getBpm());
     const double barSecs = 60.0 / bpm * (double) bpb;
     const double elapsed = looper.getRecordedSeconds();
     const double bucketSecs = juce::jmax (1.0e-4, looper.getWaveformBucketSeconds());
-
     const int labelW = 46;
-    auto a = area;
-    auto ruler = a.removeFromTop (18);
-    auto liveLane = a.removeFromBottom (46);
-    a.removeFromBottom (6);
-    auto loopLane = a;
 
-    auto loopFull = loopLane;
-    auto liveFull = liveLane;
-    auto loopLabelArea = loopLane.removeFromLeft (labelW);
-    auto liveLabelArea = liveLane.removeFromLeft (labelW);
+    rulerArea = area.removeFromTop (22);
+    liveLane = area.removeFromBottom (72);
+    area.removeFromBottom (8);
+    loopLane = area;
 
-    // How much time the loop lane shows.
-    double displaySecs = 0.0;
-    int displayBars = 4;
     const int fixed = looper.getFixedLengthBars();
 
+    // How much time the loop lane shows.
+    double secs = 0.0;
+    int displayBars = 4;
     if (st == Looper::State::recording)
     {
         if (fixed > 0)
         {
             displayBars = fixed;
-            displaySecs = displayBars * barSecs;
+            secs = displayBars * barSecs;
         }
         else
         {
-            displayBars = juce::jmax (2, (int) std::ceil (elapsed / juce::jmax (0.1, barSecs)));
-            displaySecs = displayBars * barSecs;
+            displayBars = juce::jmax (4, (int) std::ceil (elapsed / juce::jmax (0.1, barSecs)));
+            secs = displayBars * barSecs;
         }
     }
     else if (hasLoop)
     {
-        displaySecs = juce::jmax (0.05, looper.getLengthSeconds());
+        secs = juce::jmax (0.05, looper.getLengthSeconds());
         displayBars = juce::jmax (1, (int) std::ceil (looper.getLoopBars() - 1.0e-6));
     }
     else
     {
         displayBars = 4;
-        displaySecs = displayBars * barSecs;
+        secs = displayBars * barSecs;
     }
 
-    displaySecs = juce::jmax (0.05, displaySecs);
+    displaySecs = juce::jmax (0.05, secs);
+
+    auto loopFull = loopLane;
+    auto liveFull = liveLane;
+    auto loopLabel = loopFull.removeFromLeft (labelW);
+    auto liveLabel = liveFull.removeFromLeft (labelW);
+
+    laneX = loopFull.getX();
+    laneW = juce::jmax (1, loopFull.getWidth());
 
     g.setColour (juce::Colour (0xff0f0f0f));
-    g.fillRoundedRectangle (loopFull.toFloat(), 5.0f);
-    g.fillRoundedRectangle (liveFull.toFloat(), 5.0f);
+    g.fillRoundedRectangle (loopFull.toFloat(), 6.0f);
+    g.fillRoundedRectangle (liveFull.toFloat(), 6.0f);
 
     g.setColour (muted);
     g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
-    g.drawText (TR ("LOOP", "循环"), loopLabelArea, juce::Justification::centredLeft);
-    g.drawText (TR ("LIVE", "实时"), liveLabelArea, juce::Justification::centredLeft);
+    g.drawText (TR ("LOOP", "循环"), loopLabel, juce::Justification::centredLeft);
+    g.drawText (TR ("LIVE", "实时"), liveLabel, juce::Justification::centredLeft);
 
-    // Bar ruler.
-    const int laneX = loopLane.getX();
-    const int laneW = loopLane.getWidth();
-    const int barStep = displayBars > 10 ? 2 : 1;
+    // ---- ruler: bars and beats ---------------------------------------------
+    const int barStep = displayBars > 12 ? juce::jmax (1, displayBars / 12) : 1;
+    const double beatSecs = barSecs / (double) bpb;
+    const float pxPerBeat = (float) (beatSecs / displaySecs * (double) laneW);
+
     g.setFont (juce::FontOptions (10.0f));
     for (int bar = 0; bar <= displayBars; ++bar)
     {
-        const float x = (float) laneX + (float) laneW
-                        * (float) ((double) bar * barSecs / displaySecs);
-        if (x > (float) loopFull.getRight() + 0.5f)
+        const double t = (double) bar * barSecs;
+        if (t > displaySecs + 1.0e-6)
             break;
 
+        const float x = secondsToX (t);
         g.setColour (juce::Colour (0xff383838));
-        g.drawLine (x, (float) ruler.getBottom() - 7.0f, x, (float) loopFull.getBottom(), 1.0f);
+        g.drawLine (x, (float) rulerArea.getBottom() - 7.0f, x,
+                    (float) loopFull.getBottom(), 1.0f);
 
         if (bar < displayBars && bar % barStep == 0)
         {
             g.setColour (muted);
-            g.drawText (juce::String (bar + 1), (int) x + 3, ruler.getY(), 24,
-                        ruler.getHeight(), juce::Justification::centredLeft);
+            g.drawText (juce::String (bar + 1), (int) x + 3, rulerArea.getY(), 24,
+                        rulerArea.getHeight(), juce::Justification::centredLeft);
+        }
+
+        if (pxPerBeat >= 12.0f)
+        {
+            for (int beat = 1; beat < bpb; ++beat)
+            {
+                const float bx = secondsToX (t + (double) beat * beatSecs);
+                if (bx > (float) loopFull.getRight())
+                    break;
+                g.setColour (juce::Colour (0xff262626));
+                g.drawLine (bx, (float) loopFull.getY() + 4.0f, bx,
+                            (float) loopFull.getBottom() - 4.0f, 1.0f);
+            }
         }
     }
 
-    // Loop waveform.
+    // ---- loop waveform ------------------------------------------------------
     const int count = looper.getWaveformCount();
     const double recordedSecs = st == Looper::State::recording ? elapsed
                                : hasLoop ? looper.getLengthSeconds() : 0.0;
@@ -452,8 +662,8 @@ void LoopPanel::paintTimeline (juce::Graphics& g, juce::Rectangle<int> area)
     for (int b = 0; b < count; ++b)
         waveMax = juce::jmax (waveMax, looper.getWaveformPeak (b));
 
-    const int midY = loopLane.getCentreY();
-    const int halfH = juce::jmax (2, loopLane.getHeight() / 2 - 4);
+    const int midY = loopFull.getCentreY();
+    const int halfH = juce::jmax (2, loopFull.getHeight() / 2 - 5);
 
     if (count > 0 && recordedSecs > 0.0)
     {
@@ -465,8 +675,8 @@ void LoopPanel::paintTimeline (juce::Graphics& g, juce::Rectangle<int> area)
                 break;
 
             const double t1 = (double) (x + 1) / (double) laneW * displaySecs;
-            int b0 = juce::jlimit (0, count - 1, (int) std::floor (t0 / bucketSecs));
-            int b1 = juce::jlimit (0, count - 1, (int) std::ceil (t1 / bucketSecs));
+            const int b0 = juce::jlimit (0, count - 1, (int) std::floor (t0 / bucketSecs));
+            const int b1 = juce::jlimit (0, count - 1, (int) std::ceil (t1 / bucketSecs));
 
             float peak = 0.0f;
             for (int b = b0; b <= b1; ++b)
@@ -483,39 +693,79 @@ void LoopPanel::paintTimeline (juce::Graphics& g, juce::Rectangle<int> area)
         g.drawLine ((float) laneX + 4.0f, (float) midY,
                     (float) loopFull.getRight() - 4.0f, (float) midY, 1.0f);
 
+        g.setColour (muted);
+        g.setFont (juce::FontOptions (12.0f));
         if (st == Looper::State::empty)
-        {
-            g.setColour (muted);
-            g.setFont (juce::FontOptions (11.5f));
-            g.drawText (TR ("No loop yet — press SPACE", "还没有循环 — 按空格录音"),
-                        loopLane, juce::Justification::centred);
-        }
+            g.drawText (TR ("No loop yet — press SPACE to record", "还没有循环 — 按空格录音"),
+                        loopFull, juce::Justification::centred);
         else if (st == Looper::State::armingRecord)
+            g.drawText (TR ("Get ready — the count-in is running", "准备好 — 预备拍进行中"),
+                        loopFull, juce::Justification::centred);
+    }
+
+    // ---- extension overlay --------------------------------------------------
+    if (st == Looper::State::extending)
+    {
+        const double es = looper.getExtendStartSeconds();
+        const double ee = looper.getExtendEndSeconds();
+        if (ee > es)
         {
-            g.setColour (amber);
-            g.setFont (juce::FontOptions (11.5f));
-            g.drawText (TR ("Waiting for the bar…", "等待下一小节…"),
-                        loopLane, juce::Justification::centred);
+            const float x0 = secondsToX (es);
+            const float x1 = secondsToX (ee);
+            juce::Rectangle<float> r (x0, (float) loopFull.getY(), x1 - x0,
+                                      (float) loopFull.getHeight());
+            g.setColour (blue.withAlpha (0.18f));
+            g.fillRect (r);
+            g.setColour (blue);
+            g.drawRect (r, 1.5f);
+
+            g.setColour (juce::Colours::white.withAlpha (0.9f));
+            g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+            g.drawText (TR ("RECORDING ", "正在录制 ") + barsText ((ee - es) / barSecs),
+                        r.toNearestInt(), juce::Justification::centred);
         }
     }
 
-    // Playhead / recording head.
-    if (loopLane.getWidth() > 0)
+    // ---- selection ----------------------------------------------------------
+    if (hasSelection() && hasLoop)
     {
-        float head = -1.0f;
-        if (st == Looper::State::recording)
-            head = (float) laneX + (float) laneW
-                   * (float) juce::jlimit (0.0, 1.0, elapsed / displaySecs);
-        else if (hasLoop)
-            head = (float) laneX + (float) laneW
-                   * (float) juce::jlimit (0.0, 1.0, looper.getPosition());
+        const float x0 = secondsToX (selStart);
+        const float x1 = secondsToX (selEnd);
 
-        if (head >= 0.0f)
-        {
-            g.setColour (st == Looper::State::stopped ? colour.withAlpha (0.35f) : colour);
-            g.drawLine (head, (float) loopLane.getY() + 3.0f,
-                        head, (float) loopLane.getBottom() - 3.0f, 1.6f);
-        }
+        g.setColour (accent.withAlpha (0.16f));
+        g.fillRect (juce::Rectangle<float> (x0, (float) loopFull.getY(), x1 - x0,
+                                            (float) loopFull.getHeight()));
+
+        g.setColour (accent);
+        g.drawLine (x0, (float) loopFull.getY() + 2.0f, x0,
+                    (float) loopFull.getBottom() - 2.0f, 2.0f);
+        g.drawLine (x1, (float) loopFull.getY() + 2.0f, x1,
+                    (float) loopFull.getBottom() - 2.0f, 2.0f);
+
+        g.fillRoundedRectangle (juce::Rectangle<float> (x0 - 3.0f, (float) midY - 10.0f, 6.0f, 20.0f), 3.0f);
+        g.fillRoundedRectangle (juce::Rectangle<float> (x1 - 3.0f, (float) midY - 10.0f, 6.0f, 20.0f), 3.0f);
+
+        g.setFont (juce::FontOptions (10.0f));
+        g.setColour (accent.brighter (0.2f));
+        g.drawText (timeText (selStart), (int) x0 + 3, loopFull.getBottom() - 16, 70, 14,
+                    juce::Justification::centredLeft);
+        g.drawText (timeText (selEnd), (int) x1 - 73, loopFull.getBottom() - 16, 70, 14,
+                    juce::Justification::centredRight);
+    }
+
+    // ---- playhead -----------------------------------------------------------
+    float head = -1.0f;
+    if (st == Looper::State::recording)
+        head = secondsToX (elapsed);
+    else if (hasLoop)
+        head = secondsToX (juce::jlimit (0.0, 1.0, looper.getPosition())
+                           * looper.getLengthSeconds());
+
+    if (head >= 0.0f)
+    {
+        g.setColour (st == Looper::State::stopped ? colour.withAlpha (0.35f) : colour);
+        g.drawLine (head, (float) loopFull.getY() + 3.0f,
+                    head, (float) loopFull.getBottom() - 3.0f, 1.6f);
     }
 
     // ---- live input lane ----------------------------------------------------
@@ -523,14 +773,14 @@ void LoopPanel::paintTimeline (juce::Graphics& g, juce::Rectangle<int> area)
     const int windowBuckets = juce::jmax (8, (int) std::lround (windowSecs / bucketSecs));
     const uint32_t end = looper.getLiveWritePosition();
     const uint32_t available = end;
-    const uint32_t span = (uint32_t) juce::jmin ((uint32_t) windowBuckets,
-                                                 (uint32_t) juce::jmin<uint32_t> (
-                                                     available, (uint32_t) Looper::liveBuckets));
+    const uint32_t span = (uint32_t) juce::jmin (
+        (uint32_t) windowBuckets,
+        (uint32_t) juce::jmin<uint32_t> (available, (uint32_t) Looper::liveBuckets));
 
-    const int liveX = liveLane.getX();
-    const int liveW = liveLane.getWidth();
-    const int liveMidY = liveLane.getCentreY();
-    const int liveHalfH = juce::jmax (2, liveLane.getHeight() / 2 - 4);
+    const int liveX = liveFull.getX();
+    const int liveW = liveFull.getWidth();
+    const int liveMidY = liveFull.getCentreY();
+    const int liveHalfH = juce::jmax (2, liveFull.getHeight() / 2 - 4);
 
     if (span > 0 && liveW > 0)
     {
@@ -566,172 +816,56 @@ void LoopPanel::paintTimeline (juce::Graphics& g, juce::Rectangle<int> area)
                     (float) liveFull.getRight() - 4.0f, (float) liveMidY, 1.0f);
     }
 
-    // "Now" edge of the live lane.
     g.setColour (accent.withAlpha (0.65f));
     g.drawLine ((float) liveFull.getRight() - 1.0f, (float) liveFull.getY() + 3.0f,
                 (float) liveFull.getRight() - 1.0f, (float) liveFull.getBottom() - 3.0f, 1.0f);
+
+    // ---- count-in overlay ---------------------------------------------------
+    paintCountIn (g, loopFull);
 }
 
-void LoopPanel::paintLoopDisplay (juce::Graphics& g, juce::Rectangle<int> area)
+void LoopPanel::paintCountIn (juce::Graphics& g, juce::Rectangle<int> area)
 {
-    if (area.getWidth() < 120 || area.getHeight() < 120)
+    const auto st = looper.getState();
+    if (st != Looper::State::armingRecord && st != Looper::State::armingPlay)
         return;
 
-    const auto st = looper.getState();
-    const auto colour = stateColour (st);
-    const bool hasLoop = looper.hasLoop();
-    const int bpb = juce::jmax (1, drums.getGridBeatsPerBar());
-    const auto areaF = area.toFloat();
-    const float size = juce::jmin (areaF.getWidth(), areaF.getHeight()) - 26.0f;
-    const auto circle = juce::Rectangle<float> (size, size).withCentre (areaF.getCentre());
-    const auto centre = circle.getCentre();
-    const float radius = size * 0.5f;
+    const int remaining = juce::jmax (1, looper.getCountInRemaining());
+    const int total = juce::jmax (remaining, looper.getCountInTotal());
 
-    g.setColour (juce::Colour (0xff121212));
-    g.fillEllipse (circle);
+    const int pillW = juce::jmin (380, juce::jmax (260, area.getWidth() / 2));
+    auto pill = juce::Rectangle<int> (pillW, 118).withCentre (area.getCentre());
 
-    // Bar ticks.
-    const double bars = hasLoop && looper.getLoopBars() > 0.0
-                            ? juce::jmax (1.0, std::round (looper.getLoopBars()))
-                            : 4.0;
-    const int divisions = juce::jlimit (4, 32, (int) std::lround (bars * bpb));
-    for (int i = 0; i < divisions; ++i)
-    {
-        const float a = -juce::MathConstants<float>::halfPi
-                        + juce::MathConstants<float>::twoPi * (float) i / (float) divisions;
-        const float inner = radius - (i % bpb == 0 ? 23.0f : 18.0f);
-        const float outer = radius - 12.0f;
-        g.setColour (i % bpb == 0 ? juce::Colour (0xff5a5a5a) : juce::Colour (0xff3d3d3d));
-        g.drawLine (centre.x + std::cos (a) * inner, centre.y + std::sin (a) * inner,
-                    centre.x + std::cos (a) * outer, centre.y + std::sin (a) * outer,
-                    i % bpb == 0 ? 1.6f : 1.0f);
-    }
+    g.setColour (juce::Colour (0xf0181818));
+    g.fillRoundedRectangle (pill.toFloat(), 16.0f);
+    g.setColour (amber.withAlpha (0.85f));
+    g.drawRoundedRectangle (pill.toFloat(), 16.0f, 1.5f);
 
-    // Track.
-    {
-        juce::Path track;
-        track.addCentredArc (centre.x, centre.y, radius - 7.0f, radius - 7.0f, 0.0f,
-                             0.0f, juce::MathConstants<float>::twoPi, true);
-        g.setColour (juce::Colour (0xff2e2e2e));
-        g.strokePath (track, juce::PathStrokeType (10.0f, juce::PathStrokeType::curved,
-                                                   juce::PathStrokeType::rounded));
-    }
-
-    double progress = -1.0;
-    if (st == Looper::State::playing || st == Looper::State::armedOverdub
-        || st == Looper::State::overdubbing)
-        progress = looper.getPosition();
-    else if (st == Looper::State::recording)
-        progress = std::fmod (looper.getRecordedSeconds() * 2.0, 1.0);   // moving activity arc
-    else if (st == Looper::State::armingRecord || st == Looper::State::armingPlay)
-        progress = std::fmod (juce::Time::getMillisecondCounterHiRes() * 0.0015, 1.0);
-    else if (hasLoop)
-        progress = 0.0;
-
-    if (progress >= 0.0)
-    {
-        // Path arcs measure clockwise from 12 o'clock; the playhead dot below
-        // uses normal maths angles, so the arc starts at 0, not -pi/2.
-        const float end = juce::MathConstants<float>::twoPi * (float) progress;
-        juce::Path arc;
-        arc.addCentredArc (centre.x, centre.y, radius - 7.0f, radius - 7.0f, 0.0f,
-                           0.0f, end, true);
-        g.setColour (colour);
-        g.strokePath (arc, juce::PathStrokeType (10.0f, juce::PathStrokeType::curved,
-                                                 juce::PathStrokeType::rounded));
-
-        const float a = -juce::MathConstants<float>::halfPi + juce::MathConstants<float>::twoPi * (float) progress;
-        const float dotX = centre.x + std::cos (a) * (radius - 7.0f);
-        const float dotY = centre.y + std::sin (a) * (radius - 7.0f);
-        g.setColour (colour.brighter (0.35f));
-        g.fillEllipse (dotX - 7.0f, dotY - 7.0f, 14.0f, 14.0f);
-    }
-
-    // Layer rings.
-    const int layers = looper.getLayerCount();
-    for (int i = 0; i < juce::jmin (layers, 5); ++i)
-    {
-        g.setColour (colour.withAlpha (0.10f + 0.05f * (float) i));
-        g.drawEllipse (circle.reduced (30.0f + 7.0f * (float) i), 1.0f);
-    }
-
-    // Centre text.
-    juce::String big, line1, line2;
-    switch (st)
-    {
-        case Looper::State::empty:
-            big = TR ("READY", "就绪");
-            line1 = TR ("Press SPACE to record", "按空格开始录音");
-            line2 = juce::String (juce::roundToInt (drums.getBpm())) + " BPM";
-            break;
-
-        case Looper::State::armingRecord:
-        case Looper::State::armingPlay:
-            big = TR ("WAITING", "等待");
-            line1 = TR ("Starts on the next bar", "下一小节开始");
-            line2 = juce::String (juce::roundToInt (drums.getBpm())) + " BPM";
-            break;
-
-        case Looper::State::recording:
-            big = TR ("RECORDING", "录音中");
-            line1 = juce::String (looper.getRecordedSeconds(), 2) + " s";
-            line2 = looper.getFixedLengthBars() > 0
-                        ? (juce::String (looper.getFixedLengthBars()) + TR (" bar take", " 小节"))
-                        : TR ("SPACE closes at the bar", "按空格在小节线结束");
-            break;
-
-        case Looper::State::playing:
-            big = TR ("PLAYING", "循环中");
-            line1 = barsText (looper.getLoopBars());
-            line2 = juce::String (looper.getLengthSeconds(), 2) + " s  ·  "
-                    + juce::String (juce::roundToInt (looper.getLoopBpm())) + " BPM";
-            break;
-
-        case Looper::State::armedOverdub:
-            big = TR ("OVERDUB", "叠加");
-            line1 = TR ("Starts at the loop start", "从循环起点开始");
-            line2 = TR ("SPACE cancels", "按空格取消");
-            break;
-
-        case Looper::State::overdubbing:
-            big = TR ("OVERDUBBING", "叠加录音");
-            line1 = TR ("Layer ", "第 ") + juce::String (layers) + TR ("", " 层");
-            line2 = TR ("SPACE finishes", "按空格结束");
-            break;
-
-        case Looper::State::stopped:
-            big = TR ("STOPPED", "已停止");
-            line1 = barsText (looper.getLoopBars());
-            line2 = TR ("SPACE plays", "按空格播放");
-            break;
-    }
-
-    auto textArea = circle.reduced (radius * 0.42f).toNearestInt();
+    auto inner = pill.reduced (16, 10);
 
     g.setColour (juce::Colours::white);
-    g.setFont (juce::FontOptions (juce::jlimit (18.0f, 30.0f, radius * 0.16f), juce::Font::bold));
-    g.drawText (big, textArea.removeFromTop (textArea.getHeight() / 3),
-                juce::Justification::centredBottom, false);
-
-    g.setColour (juce::Colours::white.withAlpha (0.88f));
-    g.setFont (juce::FontOptions (juce::jlimit (13.0f, 18.0f, radius * 0.10f)));
-    g.drawText (line1, textArea.removeFromTop (textArea.getHeight() / 2),
+    g.setFont (juce::FontOptions (54.0f, juce::Font::bold));
+    g.drawText (juce::String (remaining), inner.removeFromTop (64),
                 juce::Justification::centred, false);
 
-    g.setColour (muted);
-    g.setFont (juce::FontOptions (juce::jlimit (11.0f, 14.0f, radius * 0.075f)));
-    g.drawText (line2, textArea, juce::Justification::centredTop, false);
+    g.setColour (amber);
+    g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    g.drawText (st == Looper::State::armingRecord
+                    ? TR ("BEATS UNTIL RECORDING", "拍后开始录音")
+                    : TR ("BEATS UNTIL PLAY", "拍后开始播放"),
+                inner.removeFromTop (18), juce::Justification::centred, false);
 
-    // Sync badge.
-    if (drums.isPlaying())
+    // One dot per beat (capped), with the beats still to wait filled in.
+    const int dots = juce::jlimit (1, 16, total);
+    const int filled = juce::jlimit (0, dots, remaining);
+    const float gap = 10.0f;
+    float x = (float) area.getCentreX() - (float) (dots - 1) * gap * 0.5f;
+    const float y = (float) inner.getCentreY() + 1.0f;
+    for (int i = 0; i < dots; ++i)
     {
-        auto badge = juce::Rectangle<int> (110, 22)
-                         .withCentre ({ (int) centre.x, (int) (centre.y + radius * 0.72f) });
-        g.setColour (accent.withAlpha (0.12f));
-        g.fillRoundedRectangle (badge.toFloat(), 11.0f);
-        g.setColour (accent);
-        g.setFont (juce::FontOptions (11.5f));
-        g.drawText (TR ("SYNC · DRUMS", "同步 · 鼓机"), badge, juce::Justification::centred);
+        g.setColour (i < filled ? amber : juce::Colour (0xff3a3a3a));
+        g.fillEllipse (x - 3.0f, y - 3.0f, 6.0f, 6.0f);
+        x += gap;
     }
 }
 
@@ -752,47 +886,90 @@ void LoopPanel::refresh()
         && std::abs (tempoSlider.getValue() - drums.getBpm()) > 0.01)
         tempoSlider.setValue (drums.getBpm(), juce::dontSendNotification);
 
-    const auto st = looper.getState();
-    if (st != lastState)
+    // A new take starts at loopId; detach the old save target and selection.
+    const int64_t id = looper.getLoopId();
+    if (id != lastLoopId)
     {
-        lastState = st;
-        updateControls();
+        lastLoopId = id;
+        clearSelection();
+        savedFolder = {};
+        savedRevision = -1;
+        lastSavedNotes.clear();
+        savedLabel.setText (TR ("Not saved yet", "还没保存"), juce::dontSendNotification);
+        savedLabel.setColour (juce::Label::textColourId, muted);
     }
 
-    juce::String s;
-    const bool synced = drums.isPlaying();
+    looper.updateWaveformIfDirty();
 
+    const double len = looper.getLengthSeconds();
+    if (hasSelection())
+    {
+        selStart = juce::jlimit (0.0, juce::jmax (0.0, len), selStart);
+        selEnd = juce::jlimit (selStart, juce::jmax (0.0, len), selEnd);
+        if (! hasSelection())
+            clearSelection();
+    }
+
+    const auto st = looper.getState();
+    const int remaining = looper.getCountInRemaining();
+
+    juce::String s;
     switch (st)
     {
         case Looper::State::empty:
-            s = TR ("Ready", "就绪") + (synced ? TR ("  ·  synced to drums", "  ·  同步鼓机") : juce::String());
+            s = TR ("Ready", "就绪")
+                + (drums.isPlaying() ? TR ("  ·  synced to drums", "  ·  同步鼓机") : juce::String())
+                + TR ("  ·  SPACE to record", "  ·  按空格录音");
             break;
+
         case Looper::State::armingRecord:
-            s = TR ("Waiting for the next bar to record…", "等待下一小节开始录音…");
+            s = TR ("Recording starts in ", "离录音开始还有 ")
+                + juce::String (juce::jmax (1, remaining))
+                + TR (" beats", " 拍");
             break;
+
         case Looper::State::recording:
             s = TR ("Recording ", "录音中 ") + juce::String (looper.getRecordedSeconds(), 2) + " s";
+            if (looper.getFixedLengthBars() > 0)
+                s << "  ·  " << juce::String (looper.getFixedLengthBars()) + TR (" bars", " 小节");
             break;
+
         case Looper::State::playing:
             s = TR ("Playing", "循环中") + "  ·  " + barsText (looper.getLoopBars())
                 + "  ·  " + TR ("layer ", "第 ") + juce::String (looper.getLayerCount())
-                + TR ("", " 层")
-                + (synced ? TR ("  ·  synced", "  ·  同步") : juce::String());
+                + TR ("", " 层");
             break;
+
         case Looper::State::armedOverdub:
             s = TR ("Overdub armed — starts at the loop start", "叠加已就绪 — 从循环起点开始");
             break;
+
         case Looper::State::overdubbing:
             s = TR ("Overdubbing — layer ", "叠加录音 — 第 ") + juce::String (looper.getLayerCount())
                 + TR ("", " 层");
             break;
+
         case Looper::State::stopped:
-            s = TR ("Stopped", "已停止") + (looper.hasLoop() ? "  ·  " + barsText (looper.getLoopBars())
-                                                              : juce::String());
+            s = TR ("Stopped", "已停止")
+                + (looper.hasLoop() ? "  ·  " + barsText (looper.getLoopBars()) : juce::String());
             break;
+
         case Looper::State::armingPlay:
-            s = TR ("Waiting for the next bar to play…", "等待下一小节开始播放…");
+            s = TR ("Playback starts in ", "离播放开始还有 ")
+                + juce::String (juce::jmax (1, remaining)) + TR (" beats", " 拍");
             break;
+
+        case Looper::State::extending:
+        {
+            const double addSecs = juce::jmax (0.0, looper.getExtendEndSeconds()
+                                                     - looper.getExtendStartSeconds());
+            const double bpm = looper.getLoopBpm() > 1.0 ? looper.getLoopBpm() : drums.getBpm();
+            const int bpb = juce::jmax (1, looper.getLoopBeatsPerBar());
+            const double barSecs = 60.0 / juce::jmax (30.0, bpm) * (double) bpb;
+            s = TR ("Extending — recording +", "延长中 — 正在录制 +")
+                + barsText (addSecs / juce::jmax (0.01, barSecs));
+            break;
+        }
     }
 
     if (s != statusText)
@@ -801,7 +978,36 @@ void LoopPanel::refresh()
         status.setText (s, juce::dontSendNotification);
     }
 
-    repaint (loopDisplay);
+    // Saved / unsaved indicator.
+    if (savedFolder.isDirectory())
+    {
+        const bool unsaved = looper.getRevision() != savedRevision;
+        const auto text = unsaved ? TR ("Unsaved changes", "有未保存的修改")
+                                  : TR ("Saved · ", "已保存 · ") + savedFolder.getFileName();
+        if (savedLabel.getText() != text)
+        {
+            savedLabel.setText (text, juce::dontSendNotification);
+            savedLabel.setColour (juce::Label::textColourId, unsaved ? amber : accent);
+        }
+    }
+
+    updateSelectionLabel();
+    updateLengthHint();
+    updateControls();
+
+    // Debounced note saving: write the sidecar after the typing pause.
+    const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+    if (notesDirty && now - notesDirtyAt > 0.9)
+    {
+        if (savedFolder.isDirectory())
+            updateNotesFile();
+
+        settings.setValue ("loopNotes", notesEditor.getText());
+        notesDirty = false;
+    }
+
+    repaint (timelineArea);
+    repaint (editArea);
 }
 
 void LoopPanel::updateControls()
@@ -820,7 +1026,7 @@ void LoopPanel::updateControls()
             setMain (TR ("●  RECORD", "●  录音"), green);
             break;
         case Looper::State::armingRecord:
-            setMain (TR ("CANCEL", "取消"), amber);
+            setMain (TR ("CANCEL COUNT-IN", "取消预备拍"), amber);
             break;
         case Looper::State::recording:
             setMain (TR ("■  CLOSE LOOP", "■  结束循环"), red);
@@ -840,13 +1046,326 @@ void LoopPanel::updateControls()
         case Looper::State::armingPlay:
             setMain (TR ("CANCEL", "取消"), amber);
             break;
+        case Looper::State::extending:
+            setMain (TR ("■  CANCEL EXTEND", "■  取消延长"), amber);
+            break;
     }
 
     const bool busy = st != Looper::State::empty && st != Looper::State::stopped;
     stopButton.setEnabled (busy);
     clearButton.setEnabled (looper.hasLoop() || st == Looper::State::recording
-                            || st == Looper::State::armingRecord);
+                            || st == Looper::State::armingRecord
+                            || st == Looper::State::extending);
+
+    const bool editable = looper.canEditNow();
+    undoButton.setEnabled (editable && looper.canUndo());
+    trimButton.setEnabled (editable && hasSelection());
+
+    const int bars = juce::jlimit (1, 64, (int) std::lround (extendBarsSlider.getValue()));
+    const double bpm = looper.getLoopBpm() > 1.0 ? looper.getLoopBpm() : drums.getBpm();
+    const int bpb = juce::jmax (1, looper.hasLoop() ? looper.getLoopBeatsPerBar()
+                                                    : drums.getGridBeatsPerBar());
+    const double barSecs = 60.0 / juce::jmax (30.0, bpm) * (double) bpb;
+    const bool fits = looper.getLengthSeconds() + (double) bars * barSecs
+                      <= Looper::getMaxSeconds() + 1.0e-6;
+    extendButton.setEnabled (editable && fits);
+
+    saveButton.setEnabled (looper.hasLoop() && (st == Looper::State::playing
+                                                || st == Looper::State::stopped));
+
+    const bool canChangeLength = st != Looper::State::recording
+                                 && st != Looper::State::extending
+                                 && st != Looper::State::overdubbing;
+    lengthBox.setEnabled (canChangeLength);
+    quantiseBox.setEnabled (canChangeLength);
 
     stopButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff303030));
     clearButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff303030));
+    undoButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff303030));
+    trimButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff303030));
+    extendButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff303030));
+    saveButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff2d5c4a));
+    openFolderButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff303030));
+}
+
+// ---- actions -----------------------------------------------------------------
+
+void LoopPanel::trimSelection()
+{
+    if (! hasSelection())
+        return;
+
+    if (looper.trimTo (selectionStart(), selectionEnd()))
+    {
+        clearSelection();
+        refresh();
+    }
+    else
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                TR ("Cannot trim", "没法裁剪"),
+                                                TR ("Select at least 20 ms inside the loop.",
+                                                    "请在循环内至少选中 20 毫秒。"));
+    }
+}
+
+void LoopPanel::extendLoop()
+{
+    const int bars = juce::jlimit (1, 64, (int) std::lround (extendBarsSlider.getValue()));
+    if (! looper.extendByBars (bars))
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                TR ("Cannot extend", "没法延长"),
+                                                TR ("The loop is busy, or the extra bars do not fit "
+                                                    "in the 2:00 buffer. Try fewer bars.",
+                                                    "循环正忙，或者新增小节超出 2:00 缓冲区。少加几小节试试。"));
+        return;
+    }
+
+    updateControls();
+}
+
+void LoopPanel::undoEdit()
+{
+    if (looper.undoEdit())
+    {
+        clearSelection();
+        refresh();
+    }
+}
+
+void LoopPanel::saveLoop()
+{
+    if (! looper.hasLoop())
+        return;
+
+    juce::String error;
+    const auto folder = LoopStore::saveLoop (looper, savedFolder,
+                                             notesEditor.getText(), "Loop", error);
+
+    if (folder == juce::File())
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                TR ("Cannot save loop", "没法保存循环"), error);
+        return;
+    }
+
+    savedFolder = folder;
+    savedRevision = looper.getRevision();
+    lastSavedNotes = notesEditor.getText();
+    notesDirty = false;
+
+    savedLabel.setText (TR ("Saved · ", "已保存 · ") + folder.getFileName(),
+                        juce::dontSendNotification);
+    savedLabel.setColour (juce::Label::textColourId, accent);
+    settings.setValue ("loopNotes", notesEditor.getText());
+    updateControls();
+}
+
+void LoopPanel::updateNotesFile()
+{
+    if (! savedFolder.isDirectory())
+        return;
+
+    juce::String error;
+    if (LoopStore::updateNotes (savedFolder, notesEditor.getText(), error))
+    {
+        lastSavedNotes = notesEditor.getText();
+    }
+    else
+    {
+        savedLabel.setText (TR ("Notes not saved", "备注没保存"), juce::dontSendNotification);
+        savedLabel.setColour (juce::Label::textColourId, red);
+    }
+}
+
+void LoopPanel::openLoopsFolder()
+{
+    auto folder = savedFolder.isDirectory() ? savedFolder : LoopStore::getLoopsFolder();
+    folder.createDirectory();
+    folder.startAsProcess();
+}
+
+void LoopPanel::clearSelection()
+{
+    selStart = selEnd = -1.0;
+    dragMode = 0;
+    dragged = false;
+    updateSelectionLabel();
+    updateControls();
+    repaint (timelineArea);
+}
+
+// ---- selection / mouse -------------------------------------------------------
+
+bool LoopPanel::hasSelection() const noexcept
+{
+    return selEnd > selStart + 0.02;
+}
+
+double LoopPanel::selectionStart() const noexcept
+{
+    return juce::jmin (selStart, selEnd);
+}
+
+double LoopPanel::selectionEnd() const noexcept
+{
+    return juce::jmax (selStart, selEnd);
+}
+
+double LoopPanel::xToSeconds (int x) const noexcept
+{
+    return ((double) (x - laneX) / (double) juce::jmax (1, laneW)) * displaySecs;
+}
+
+float LoopPanel::secondsToX (double seconds) const noexcept
+{
+    return (float) laneX + (float) laneW
+           * (float) (seconds / juce::jmax (1.0e-6, displaySecs));
+}
+
+double LoopPanel::snapTime (double seconds, bool free) const noexcept
+{
+    if (free || looper.getQuantise() == LoopQuantise::off)
+        return seconds;
+
+    const bool hasLoop = looper.hasLoop();
+    const double bpm = hasLoop && looper.getLoopBpm() > 1.0 ? looper.getLoopBpm()
+                                                            : juce::jmax (30.0, (double) drums.getBpm());
+    const int bpb = juce::jmax (1, hasLoop ? looper.getLoopBeatsPerBar()
+                                           : drums.getGridBeatsPerBar());
+    const double unit = looper.getQuantise() == LoopQuantise::bar
+                            ? 60.0 / bpm * (double) bpb : 60.0 / bpm;
+
+    return std::round (seconds / juce::jmax (1.0e-6, unit)) * unit;
+}
+
+void LoopPanel::updateSelectionLabel()
+{
+    juce::String s;
+    if (hasSelection())
+    {
+        const bool hasLoop = looper.hasLoop();
+        const double bpm = hasLoop && looper.getLoopBpm() > 1.0 ? looper.getLoopBpm()
+                                                                : juce::jmax (30.0, (double) drums.getBpm());
+        const int bpb = juce::jmax (1, hasLoop ? looper.getLoopBeatsPerBar()
+                                               : drums.getGridBeatsPerBar());
+        const double barSecs = 60.0 / bpm * (double) bpb;
+        s = TR ("Selection ", "选区 ") + timeText (selectionStart()) + " – "
+            + timeText (selectionEnd()) + "  ·  "
+            + barsText ((selectionEnd() - selectionStart()) / juce::jmax (0.01, barSecs));
+    }
+    else
+    {
+        s = TR ("Drag on the waveform to select a region (hold Shift for free timing)",
+                "在波形上拖动选区（按住 Shift 不吸附网格）");
+    }
+
+    if (selectionLabel.getText() != s)
+        selectionLabel.setText (s, juce::dontSendNotification);
+}
+
+void LoopPanel::mouseMove (const juce::MouseEvent& e)
+{
+    if (! loopLane.contains (e.getPosition()))
+    {
+        setMouseCursor (juce::MouseCursor::NormalCursor);
+        return;
+    }
+
+    if (hasSelection()
+        && (std::abs ((float) e.x - secondsToX (selStart)) <= 7.0f
+            || std::abs ((float) e.x - secondsToX (selEnd)) <= 7.0f))
+        setMouseCursor (juce::MouseCursor::LeftRightResizeCursor);
+    else
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+}
+
+void LoopPanel::mouseDown (const juce::MouseEvent& e)
+{
+    if (! loopLane.contains (e.getPosition()) || ! looper.canEditNow())
+        return;
+
+    mouseDownX = e.x;
+    dragged = false;
+    dragMode = 1;
+    dragAnchor = 0.0;
+
+    const double len = looper.getLengthSeconds();
+    const double t = juce::jlimit (0.0, juce::jmax (0.0, len), xToSeconds (e.x));
+
+    if (hasSelection())
+    {
+        if (std::abs ((float) e.x - secondsToX (selStart)) <= 7.0f)
+        {
+            dragMode = 2;
+            return;
+        }
+        if (std::abs ((float) e.x - secondsToX (selEnd)) <= 7.0f)
+        {
+            dragMode = 3;
+            return;
+        }
+    }
+
+    dragAnchor = juce::jlimit (0.0, juce::jmax (0.0, len), snapTime (t, e.mods.isShiftDown()));
+    selStart = selEnd = dragAnchor;
+}
+
+void LoopPanel::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragMode == 0)
+        return;
+
+    if (std::abs (e.x - mouseDownX) > 2)
+        dragged = true;
+
+    const double len = juce::jmax (0.0, looper.getLengthSeconds());
+    const bool free = e.mods.isShiftDown();
+    double t = juce::jlimit (0.0, len, xToSeconds (e.x));
+    t = juce::jlimit (0.0, len, snapTime (t, free));
+
+    if (dragMode == 1)
+    {
+        selStart = juce::jmin (dragAnchor, t);
+        selEnd = juce::jmax (dragAnchor, t);
+    }
+    else if (dragMode == 2)
+    {
+        selStart = juce::jlimit (0.0, juce::jmax (0.0, selEnd - 0.02), t);
+    }
+    else if (dragMode == 3)
+    {
+        selEnd = juce::jlimit (selStart + 0.02, len, t);
+    }
+
+    updateSelectionLabel();
+    updateControls();
+    repaint (timelineArea);
+}
+
+void LoopPanel::mouseUp (const juce::MouseEvent& e)
+{
+    if (dragMode == 0)
+        return;
+
+    const int mode = dragMode;
+    dragMode = 0;
+
+    if (! dragged && mode == 1)
+    {
+        // A plain click moves the playhead and clears the old selection.
+        clearSelection();
+        const double len = looper.getLengthSeconds();
+        if (len > 0.0)
+            looper.seek (juce::jlimit (0.0, juce::jmax (0.0, len), xToSeconds (e.x)));
+    }
+    else if (! hasSelection())
+    {
+        clearSelection();
+    }
+
+    updateSelectionLabel();
+    updateControls();
+    repaint (timelineArea);
 }

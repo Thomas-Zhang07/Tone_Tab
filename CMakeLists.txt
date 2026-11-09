@@ -43,7 +43,10 @@ add_library(nam_core OBJECT ${NAM_SOURCES})
 target_include_directories(nam_core SYSTEM PUBLIC
     "${NAM_ROOT}"
     "${NAM_ROOT}/eigen"
-    "${NAM_ROOT}/nlohmann")
+    "${NAM_ROOT}/nlohmann"
+    "${NAM_ROOT}/Dependencies"
+    "${NAM_ROOT}/Dependencies/eigen"
+    "${NAM_ROOT}/Dependencies/nlohmann")
 target_compile_definitions(nam_core PUBLIC NAM_SAMPLE_FLOAT NAM_ENABLE_A2_FAST)
 target_compile_features(nam_core PUBLIC cxx_std_20)
 set_target_properties(nam_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -66,6 +69,7 @@ set(TONE_CORE_SOURCES
     Source/fx/EffectChain.cpp
     Source/drums/DrumMachine.cpp
     Source/looper/Looper.cpp
+    Source/looper/LoopStore.cpp
     Source/song/SongBuilder.cpp
     Source/song/GpImporter.cpp
     Source/practice/TabPlayer.cpp
