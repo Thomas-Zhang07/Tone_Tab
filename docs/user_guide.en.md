@@ -50,13 +50,27 @@
 - With the drum machine playing, recording starts on the next drum bar and the
   loop stays locked to the drums. Start the drums first for the tightest
   result; the loop keeps playing when you switch tabs.
-- **New loop length** can be **Auto** (close with a second press) or fixed at
-  1 / 2 / 4 / 8 bars. A fixed length records with one press and starts looping
-  by itself.
-- The **LOOP** lane shows the take waveform with bar numbers and a playhead;
-  the **LIVE** lane shows what you are playing right now (also before you start
-  recording).
-- Tempo is shared with the drum machine. Maximum loop length is 30 seconds.
+- **Count-in before recording** is adjustable from 0 to 32 beats, and the
+  beats left before recording are shown in large type in the middle of the
+  timeline. With the drum machine running, the count-in starts on the next bar.
+- **New loop length** can be **Auto** (close with a second press) or any whole
+  number of bars from 1 to 64. A fixed length records with one press and starts
+  looping by itself. The buffer holds 2 minutes, so very long takes at slow
+  tempos stop at the 2-minute cap (the hint under the box shows how many bars
+  fit at the current tempo).
+- **Editing**: drag on the loop waveform to select a region, then press
+  **Trim to selection** to keep only that part. **Shift** while dragging turns
+  off grid snapping. **Undo** (or `U`) restores the last trim or extension.
+- **Continue / extend**: choose any number of bars and press **Extend &
+  record**. The loop keeps playing; when the playhead reaches the end, the new
+  bars are recorded live. This is the loop-pedal way to add a section.
+- Click the waveform to move the playhead. The **LOOP** lane shows the take
+  waveform with bar/beat numbers and a playhead; the **LIVE** lane shows what
+  you are playing right now.
+- **Save loop** writes `loop.wav` plus `loop.json` (tempo, bars, and your text
+  notes) to the loops folder. **Loops folder** opens it. Notes are saved
+  automatically after you stop typing.
+- Tempo is shared with the drum machine. Maximum loop length is 2 minutes.
 
 ## Practice view
 

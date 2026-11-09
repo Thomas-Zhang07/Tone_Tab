@@ -15,6 +15,7 @@
 #include "ui/StatsView.h"
 #include "ui/PresetBar.h"
 #include "ui/LoopPanel.h"
+#include "looper/LoopStore.h"
 #include "ui/RecordingPanel.h"
 #include "ui/EffectStyle.h"
 #include "app/AppPaths.h"
@@ -768,6 +769,25 @@ int runOfflineTests (int argc, char* argv[])
         runAudio (std::vector<float> ((size_t) (1.2 * sr), 0.0f));
         panel.refresh();
         snap ("loop_station.png");
+
+        // Count-in overlay (four beats, caught half-way through).
+        lp.clear();
+        runAudio (std::vector<float> ((size_t) (0.3 * sr), 0.0f));
+        props.setValue ("loopCountIn", 4);
+        {
+            LoopPanel countPanel (lp, engine.getDrums(), props);
+            countPanel.setSize (1208, 722);
+            lp.toggle();
+            runAudio (phrase (0.8));
+            countPanel.refresh();
+
+            auto img = countPanel.createComponentSnapshot (countPanel.getLocalBounds(), true, 1.0f);
+            juce::PNGImageFormat png;
+            auto f = outDir.getChildFile ("loop_countin.png");
+            f.deleteFile();
+            if (auto os = f.createOutputStream())
+                png.writeImageToStream (img, *os);
+        }
         return 0;
     }
     if (argc > 2 && juce::String (argv[1]) == "--gervana-ui")
@@ -2261,6 +2281,183 @@ int runOfflineTests (int argc, char* argv[])
             check (started && std::abs (actual - expected) < 0.01,
                    T ("开鼓机时等待 ") + juce::String (actual, 3) + T (" 秒到下一小节（期望 ")
                        + juce::String (expected, 3) + T ("）"));
+        }
+
+        // 16f. Adjustable count-in: four beats at 120 BPM are counted before
+        // recording, and the remaining-beat display drops as it runs.
+        {
+            AudioEngine e;
+            e.prepareForOffline (sr, block);
+            e.setOutputGainDb (0.0f);
+            auto& lp = e.getLooper();
+            lp.setQuantise (LoopQuantise::bar);
+            lp.setFixedLengthBars (1);
+            lp.setCountInBeats (4);
+            e.getDrums().setBpm (120.0f);
+
+            lp.toggle();
+            std::vector<float> l, r;
+            process (e, tone (1.9, 220.0, 0.1f), l, r);
+            check (lp.getState() == Looper::State::armingRecord,
+                   T ("预备拍 4 拍：1.9 秒时还在数拍"));
+            check (lp.getCountInRemaining() >= 1,
+                   T ("预备拍剩余拍数显示为 ") + juce::String (lp.getCountInRemaining()));
+
+            process (e, tone (0.2, 220.0, 0.1f), l, r);
+            check (lp.getState() == Looper::State::recording,
+                   T ("数完 4 拍后开始录音"));
+
+            process (e, tone (2.2, 220.0, 0.1f), l, r);
+            check (lp.getState() == Looper::State::playing
+                       && std::abs (lp.getLengthSeconds() - 2.0) < 0.01,
+                   T ("预备拍之后的固定 1 小节=")
+                       + juce::String (lp.getLengthSeconds(), 3) + T (" 秒"));
+        }
+
+        // 16g. Eight bars at 60 BPM are 32 seconds. The old 30-second buffer
+        // cut the last half bar off; the 2-minute buffer must keep it.
+        {
+            AudioEngine e;
+            e.prepareForOffline (sr, block);
+            e.setOutputGainDb (0.0f);
+            auto& lp = e.getLooper();
+            lp.setQuantise (LoopQuantise::bar);
+            lp.setFixedLengthBars (8);
+            e.getDrums().setBpm (60.0f);
+
+            lp.toggle();
+            std::vector<float> l, r;
+            process (e, tone (32.5, 220.0, 0.05f), l, r);
+            check (lp.getState() == Looper::State::playing,
+                   T ("60 BPM 的 8 小节录完并循环"));
+            check (std::abs (lp.getLengthSeconds() - 32.0) < 0.01,
+                   T ("8 小节长度 ") + juce::String (lp.getLengthSeconds(), 3)
+                       + T (" 秒（期望 32.000，不能被 30 秒截断）"));
+            check (std::abs (lp.getLoopBars() - 8.0) < 0.02,
+                   T ("8 小节显示 ") + juce::String (lp.getLoopBars(), 2) + T (" bars"));
+        }
+
+        // 16h. Trim to a selection and undo it.
+        {
+            AudioEngine e;
+            e.prepareForOffline (sr, block);
+            e.setOutputGainDb (0.0f);
+            auto& lp = e.getLooper();
+            lp.setQuantise (LoopQuantise::bar);
+            lp.setFixedLengthBars (2);
+            lp.setLevelDb (0.0f);
+            e.getDrums().setBpm (120.0f);
+
+            lp.toggle();
+            std::vector<float> l, r;
+            process (e, tone (4.0, 220.0, 0.2f), l, r);
+            check (std::abs (lp.getLengthSeconds() - 4.0) < 0.01, T ("裁剪前 2 小节"));
+
+            check (lp.trimTo (1.0, 3.0), T ("裁剪到 1–3 秒返回成功"));
+            check (std::abs (lp.getLengthSeconds() - 2.0) < 0.01
+                       && std::abs (lp.getLoopBars() - 1.0) < 0.02,
+                   T ("裁剪后长度 ") + juce::String (lp.getLengthSeconds(), 3)
+                       + T (" 秒 / ") + juce::String (lp.getLoopBars(), 2) + T (" 小节"));
+
+            juce::AudioBuffer<float> trimmed;
+            double rate = 0.0;
+            check (lp.copyLoopTo (trimmed, rate) && trimmed.getNumSamples() == (int) (2.0 * sr),
+                   T ("裁剪后的音频可以复制出来保存"));
+            double rms = 0.0;
+            for (int i = 0; i < trimmed.getNumSamples(); ++i)
+                rms += (double) trimmed.getSample (0, i) * trimmed.getSample (0, i);
+            rms = std::sqrt (rms / juce::jmax (1, trimmed.getNumSamples()));
+            check (rms > 0.02, T ("裁剪后的循环有声音，RMS ") + juce::String (rms, 3));
+
+            check (lp.canUndo() && lp.undoEdit(), T ("裁剪后可以撤销"));
+            check (std::abs (lp.getLengthSeconds() - 4.0) < 0.01
+                       && std::abs (lp.getLoopBars() - 2.0) < 0.02,
+                   T ("撤销恢复 2 小节"));
+        }
+
+        // 16i. Extend by two bars and record the new section live.
+        {
+            AudioEngine e;
+            e.prepareForOffline (sr, block);
+            e.setOutputGainDb (0.0f);
+            auto& lp = e.getLooper();
+            lp.setQuantise (LoopQuantise::bar);
+            lp.setFixedLengthBars (1);
+            lp.setLevelDb (0.0f);
+            e.getDrums().setBpm (120.0f);
+
+            lp.toggle();
+            std::vector<float> l, r;
+            process (e, tone (2.0, 220.0, 0.2f), l, r);
+            check (std::abs (lp.getLengthSeconds() - 2.0) < 0.01, T ("延长前 1 小节"));
+
+            check (lp.extendByBars (2), T ("延长 2 小节返回成功"));
+            process (e, tone (6.3, 330.0, 0.2f), l, r);
+            check (lp.getState() == Looper::State::playing, T ("延长录音完成"));
+            check (std::abs (lp.getLengthSeconds() - 6.0) < 0.01
+                       && std::abs (lp.getLoopBars() - 3.0) < 0.02,
+                   T ("延长后长度 ") + juce::String (lp.getLengthSeconds(), 3)
+                       + T (" 秒 / ") + juce::String (lp.getLoopBars(), 2) + T (" 小节"));
+
+            juce::AudioBuffer<float> extended;
+            double rate = 0.0;
+            check (lp.copyLoopTo (extended, rate), T ("延长后的音频可以复制出来保存"));
+            double rms = 0.0;
+            const int from = (int) (2.2 * sr), to = (int) (5.8 * sr);
+            for (int i = from; i < to; ++i)
+                rms += (double) extended.getSample (0, i) * extended.getSample (0, i);
+            rms = std::sqrt (rms / juce::jmax (1, to - from));
+            check (rms > 0.02, T ("新增的两小节录到了声音，RMS ") + juce::String (rms, 3));
+
+            check (lp.undoEdit() && std::abs (lp.getLengthSeconds() - 2.0) < 0.01,
+                   T ("撤销延长恢复 1 小节"));
+        }
+
+        // 16j. Save a loop with notes, then update the notes.
+        {
+            AudioEngine e;
+            e.prepareForOffline (sr, block);
+            e.setOutputGainDb (0.0f);
+            auto& lp = e.getLooper();
+            lp.setQuantise (LoopQuantise::bar);
+            lp.setFixedLengthBars (1);
+            lp.setLevelDb (0.0f);
+            e.getDrums().setBpm (120.0f);
+
+            lp.toggle();
+            std::vector<float> l, r;
+            process (e, tone (2.2, 220.0, 0.2f), l, r);
+
+            auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                           .getChildFile ("tone_tab_loopstore").getNonexistentSibling();
+            dir.createDirectory();
+
+            juce::String err;
+            const auto saved = LoopStore::saveLoop (lp, dir, "first note", "Test loop", err);
+            const auto jsonFile = saved.getChildFile ("loop.json");
+            check (saved == dir && saved.getChildFile ("loop.wav").existsAsFile()
+                       && jsonFile.existsAsFile(),
+                   T ("保存循环写出 loop.wav + loop.json") + (err.isEmpty() ? juce::String() : "  " + err));
+
+            auto v = juce::JSON::parse (jsonFile);
+            check (v["notes"].toString() == "first note" && v["kind"].toString() == "loop"
+                       && std::abs ((double) v["bars"] - 1.0) < 0.02,
+                   T ("loop.json 带备注、类型和小节数"));
+
+            check (LoopStore::updateNotes (saved, "second note", err),
+                   T ("更新循环备注"));
+            v = juce::JSON::parse (jsonFile);
+            check (v["notes"].toString() == "second note", T ("备注已经更新"));
+
+            juce::AudioFormatManager fm;
+            fm.registerBasicFormats();
+            if (auto reader = std::unique_ptr<juce::AudioFormatReader> (
+                    fm.createReaderFor (saved.getChildFile ("loop.wav"))))
+                check (reader->numChannels == 2
+                           && std::abs ((double) reader->lengthInSamples - 2.0 * sr) < 1.0,
+                       T ("保存的 WAV 是 2 秒立体声"));
+
+            dir.deleteRecursively();
         }
     }
 
