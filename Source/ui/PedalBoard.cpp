@@ -10,6 +10,28 @@ namespace
 {
     constexpr int cardW = 124, cardH = 168, gap = 12;
     const juce::String dragPrefix ("pedal:");
+
+    bool isAmpSlot (const EffectSlot& s)
+    {
+        return s.kind == EffectSlot::Kind::nam
+            || (s.kind == EffectSlot::Kind::builtin && s.typeId == "amp");
+    }
+
+    bool isCabSlot (const EffectSlot& s)
+    {
+        return s.kind == EffectSlot::Kind::ir
+            || (s.kind == EffectSlot::Kind::builtin && s.typeId == "cab");
+    }
+
+    bool isPostSlot (const EffectSlot& s)
+    {
+        if (s.kind != EffectSlot::Kind::builtin)
+            return false;
+
+        static const juce::StringArray post { "eq", "geq", "chorus", "flanger", "phaser",
+                                              "tremolo", "vibrato", "delay", "reverb", "shimmer" };
+        return post.contains (s.typeId);
+    }
 }
 
 // =============================================================================
@@ -638,10 +660,79 @@ void PedalBoard::showSlotMenu (int index)
     });
 }
 
+int PedalBoard::frontInsertIndex() const
+{
+    const auto& slots = chain.getSlots();
+
+    // New drive/comp/wah pedals join the end of the front section: just before
+    // the first amp or cab, or before the first post-amp effect if there is no
+    // amp yet.
+    for (int i = 0; i < (int) slots.size(); ++i)
+        if (isAmpSlot (*slots[(size_t) i]) || isCabSlot (*slots[(size_t) i]))
+            return i;
+
+    for (int i = 0; i < (int) slots.size(); ++i)
+        if (isPostSlot (*slots[(size_t) i]))
+            return i;
+
+    return (int) slots.size();
+}
+
+int PedalBoard::ampInsertIndex() const
+{
+    const auto& slots = chain.getSlots();
+
+    // A new amp goes in front of an existing cab, else in front of the first
+    // post-amp effect.
+    for (int i = 0; i < (int) slots.size(); ++i)
+        if (isCabSlot (*slots[(size_t) i]))
+            return i;
+
+    for (int i = 0; i < (int) slots.size(); ++i)
+        if (isPostSlot (*slots[(size_t) i]))
+            return i;
+
+    return (int) slots.size();
+}
+
+int PedalBoard::cabInsertIndex() const
+{
+    const auto& slots = chain.getSlots();
+
+    // A cab/IR sits directly after the last amp or cab, else before the
+    // post-amp effects.
+    int after = -1;
+    for (int i = 0; i < (int) slots.size(); ++i)
+        if (isAmpSlot (*slots[(size_t) i]) || isCabSlot (*slots[(size_t) i]))
+            after = i;
+
+    if (after >= 0)
+        return after + 1;
+
+    for (int i = 0; i < (int) slots.size(); ++i)
+        if (isPostSlot (*slots[(size_t) i]))
+            return i;
+
+    return (int) slots.size();
+}
+
+int PedalBoard::insertIndexForBuiltin (const juce::String& id) const
+{
+    if (id == "amp") return ampInsertIndex();
+    if (id == "cab") return cabInsertIndex();
+
+    static const juce::StringArray front { "denoise", "gate", "comp", "boost", "overdrive",
+                                           "distortion", "fuzz", "wah", "octave", "pitch" };
+    if (front.contains (id) || Gervana::isGervana (id))
+        return frontInsertIndex();
+
+    // EQ, modulation and time effects default to the end (post-amp).
+    return (int) chain.getSlots().size();
+}
+
 void PedalBoard::showAddMenu (juce::Component* target)
 {
     const auto& builtins = getBuiltinEffectList();
-    const int insertIndex = (int) chain.getSlots().size();
 
     juce::PopupMenu m;
 
@@ -726,15 +817,15 @@ void PedalBoard::showAddMenu (juce::Component* target)
     m.addItem (3, TR ("Manage / Scan VST3 Plug-ins…", "管理 / 扫描 VST3 插件…"));
 
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (target),
-                     [this, insertIndex, types, fenderFiles] (int r)
+                     [this, types, fenderFiles] (int r)
     {
         if (r >= 9000 && r - 9000 < (int) fenderFiles.size())
-            addNamFile (fenderFiles[(size_t) (r - 9000)], insertIndex);
+            addNamFile (fenderFiles[(size_t) (r - 9000)], ampInsertIndex());
         else if (r >= 5000 && r - 5000 < types.size())
         {
             juce::String error;
             if (auto slot = chain.createPlugin (types[r - 5000], error))
-                chain.insert (slot, insertIndex);
+                chain.insert (slot, (int) chain.getSlots().size());
             else
                 showError (error);
         }
@@ -742,12 +833,15 @@ void PedalBoard::showAddMenu (juce::Component* target)
         {
             const auto& list = getBuiltinEffectList();
             if (r - 1000 < (int) list.size())
-                chain.insert (chain.createBuiltin (list[(size_t) (r - 1000)].id), insertIndex);
+            {
+                const auto& id = list[(size_t) (r - 1000)].id;
+                chain.insert (chain.createBuiltin (id), insertIndexForBuiltin (id));
+            }
         }
-        else if (r == 4) NamBrowser::show (this, [this, insertIndex] (juce::File file)
-                                            { addNamFile (file, insertIndex); });
-        else if (r == 1) chooseFile (true, insertIndex, false);
-        else if (r == 2) chooseFile (false, insertIndex, false);
+        else if (r == 4) NamBrowser::show (this, [this] (juce::File file)
+                                            { addNamFile (file, ampInsertIndex()); });
+        else if (r == 1) chooseFile (true, ampInsertIndex(), false);
+        else if (r == 2) chooseFile (false, cabInsertIndex(), false);
         else if (r == 3 && onOpenPluginManager) onOpenPluginManager();
     });
 }

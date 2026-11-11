@@ -16,9 +16,11 @@ public:
     bool loadPreset (const juce::String& name);
     juce::String getCurrentPresetName() const { return currentName; }
 
+    void paint (juce::Graphics&) override;
     void resized() override;
 
-    // 预设分类：按名字里“ · ”前面的部分；内置老预设归“基础”，用户自己存的归“我的预设”
+    // 预设分类：按名字里“ · ”前面的部分；"Artist - Title" 归艺术家分组；
+    // 内置老预设归“基础”，用户自己存的归“我的预设”
     static juce::String categoryOf (const juce::String& presetName);
     static const juce::StringArray& categoryOrder();
 
@@ -39,6 +41,7 @@ private:
     juce::Label label;
     juce::ComboBox presetBox;
     juce::TextButton saveButton, saveAsButton, deleteButton, folderButton;
+    juce::Rectangle<int> separator;
     std::unique_ptr<juce::AlertWindow> nameDialog;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PresetBar)

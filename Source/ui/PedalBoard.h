@@ -42,6 +42,13 @@ private:
     void closeEditor (EffectSlot* slot);
     void chooseFile (bool nam, int index, bool replaceExisting);
     void addNamFile (const juce::File& file, int index);
+
+    // Default insertion points: drive/comp/wah before the amp, cab right after
+    // it, and EQ/modulation/time effects after it.
+    int frontInsertIndex() const;
+    int ampInsertIndex() const;
+    int cabInsertIndex() const;
+    int insertIndexForBuiltin (const juce::String& id) const;
     void duplicate (int index);
     void showError (const juce::String& message);
 

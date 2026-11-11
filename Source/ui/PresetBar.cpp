@@ -107,14 +107,19 @@ PresetBar::PresetBar (EffectChain& c, juce::PropertiesFile& s) : chain (c), sett
     addAndMakeVisible (saveButton);
 
     saveAsButton.setButtonText (TR ("Save As…", "另存为…"));
+    saveAsButton.setTooltip (TR ("Save this tone as a new preset", "把当前音色另存为新预设"));
     saveAsButton.onClick = [this] { askForNameAndSave(); };
     addAndMakeVisible (saveAsButton);
 
     deleteButton.setButtonText (TR ("Delete", "删除"));
+    deleteButton.setTooltip (TR ("Delete the current preset file", "删除当前预设文件"));
+    deleteButton.setColour (juce::TextButton::textColourOffId, juce::Colour (0xffe0736f));
+    deleteButton.setColour (juce::TextButton::textColourOnId, juce::Colour (0xffff8b85));
     deleteButton.onClick = [this] { deleteCurrent(); };
     addAndMakeVisible (deleteButton);
 
     folderButton.setButtonText (TR ("Open Folder", "打开文件夹"));
+    folderButton.setTooltip (TR ("Open the preset folder", "打开预设文件夹"));
     folderButton.onClick = [] { getPresetFolder().startAsProcess(); };
     addAndMakeVisible (folderButton);
 
@@ -241,6 +246,9 @@ namespace
 {
     juce::String categoryLabel (const juce::String& key)
     {
+        if (key.startsWith ("artist:"))
+            return key.fromFirstOccurrenceOf (":", false, false);
+
         if (key == "Gervana")     return "Gervana";
         if (key == "mayer")       return "Mayer";
         if (key == "classicrock") return "Classic Rock";
@@ -278,6 +286,33 @@ namespace
             return prefix.toLowerCase();
         return {};
     }
+
+    // "Artist - Title" packs (Clapton, Cream, Prince, Slash, …) get a section of
+    // their own. The key keeps the artist as written so the menu label reads
+    // naturally; new packs are picked up without touching this file.
+    juce::String artistCategoryOf (const juce::String& name)
+    {
+        const juce::String sep (" - ");
+        if (! name.contains (sep))
+            return {};
+
+        const auto artist = name.upToFirstOccurrenceOf (sep, false, false).trim();
+        if (artist.isEmpty() || artist.length() > 28)
+            return {};
+
+        // ASCII names only: Chinese style prefixes use " · " and are handled above.
+        for (auto c : artist)
+            if (c >= 128 || (! juce::CharacterFunctions::isLetterOrDigit (c) && c != ' '
+                             && c != '&' && c != '.' && c != '\''))
+                return {};
+
+        return "artist:" + artist;
+    }
+
+    bool isArtistCategory (const juce::String& key)
+    {
+        return key.startsWith ("artist:");
+    }
 }
 
 const juce::StringArray& PresetBar::categoryOrder()
@@ -311,6 +346,10 @@ juce::String PresetBar::categoryOf (const juce::String& name)
         if (const auto key = categoryKeyForPrefix (prefix); key.isNotEmpty())
             return key;
     }
+
+    if (const auto artist = artistCategoryOf (name); artist.isNotEmpty())
+        return artist;
+
     return "user";
 }
 
@@ -332,13 +371,47 @@ void PresetBar::refreshList()
         groups[categoryOf (display)].add (display);
     }
 
+    // Every section reads alphabetically, whatever order the files were in.
+    for (auto& g : groups)
+        g.second.sort (true);
+
+    // Artist packs are discovered from the folder, so a new "Artist - Title"
+    // pack gets its own section without a code change.
+    juce::StringArray artistKeys;
+    for (auto& g : groups)
+        if (isArtistCategory (g.first))
+            artistKeys.add (g.first);
+    artistKeys.sort (true);
+
+    juce::StringArray ordered;
+    auto addGroup = [&ordered, &groups] (const juce::String& key)
+    {
+        if (groups.find (key) != groups.end())
+            ordered.addIfNotAlreadyThere (key);
+    };
+
+    bool artistsPlaced = false;
+    for (auto& cat : categoryOrder())
+    {
+        // Artist sections sit with the other player packs, after Classic Rock.
+        if (! artistsPlaced && cat == "nam")
+        {
+            for (auto& a : artistKeys)
+                addGroup (a);
+            artistsPlaced = true;
+        }
+        addGroup (cat);
+    }
+    for (auto& a : artistKeys)
+        addGroup (a);
+
     auto* root = presetBox.getRootMenu();
     int id = 1, selectedId = 0;
     currentPresetId = 0;
 
     root->addItem (9000, TR ("Browse NAM Models…", "浏览 NAM 模型…"));
     root->addSeparator();
-    for (auto& cat : categoryOrder())
+    for (auto& cat : ordered)
     {
         auto it = groups.find (cat);
         if (it == groups.end() || it->second.isEmpty())
@@ -459,14 +532,29 @@ void PresetBar::deleteCurrent()
     }));
 }
 
+void PresetBar::paint (juce::Graphics& g)
+{
+    // Thin rule between the save actions and the preset-management actions.
+    if (! separator.isEmpty())
+    {
+        g.setColour (juce::Colour (0x33ffffff));
+        g.fillRect (juce::Rectangle<float> ((float) separator.getCentreX() - 0.5f,
+                                            (float) separator.getY() + 5.0f,
+                                            1.0f, (float) separator.getHeight() - 10.0f));
+    }
+}
+
 void PresetBar::resized()
 {
     auto r = getLocalBounds();
-    label.setBounds (r.removeFromLeft (76));
+    label.setBounds (r.removeFromLeft (88));
+
+    // [Save] [Save As…] | [Delete] [Open Folder]
     folderButton.setBounds (r.removeFromRight (96).reduced (2));
     deleteButton.setBounds (r.removeFromRight (64).reduced (2));
+    separator = r.removeFromRight (13);
     saveAsButton.setBounds (r.removeFromRight (84).reduced (2));
     saveButton.setBounds (r.removeFromRight (64).reduced (2));
-    r.removeFromRight (8);
+    r.removeFromRight (6);
     presetBox.setBounds (r.reduced (0, 2));
 }

@@ -20,8 +20,16 @@
     clean / crunch / high gain / boost / A2 full rig / starter.
   - **Load NAM Amp Model…** — file picker.
   - **Load Cab IR…**, then the built-in effect groups and VST3.
-- The preset dropdown starts with **Fender NAM**, **Mayer**, **Classic Rock** and
-  **Captures**; Gervana is further down.
+- New effects land in the right part of the chain automatically: drive / comp /
+  wah / fuzz pedals go in front of the amp, delay / reverb / modulation after it,
+  and a cab IR directly after the amp (or in front of an existing cab). Drag
+  anything afterwards if you want a different order.
+- The preset dropdown is grouped by category, with a count after each group and
+  names sorted inside it: **Fender NAM**, **Mayer**, **Classic Rock**, then artist
+  packs such as **Clapton**, **Cream**, **Prince** and **Slash** (any
+  "Artist - Title" preset gets its own section), followed by **Captures** and the
+  style groups (Classic / Pioneer / Post-rock …). Gervana is further down, and
+  your own saves are in **My Presets** at the end.
 - NAM models expect 48 kHz. A model marked *amp only* needs a cab IR; a
   *full rig* model already contains the cabinet.
 - **Drums** is its own top tab: large Start/Stop, a visible style grid
