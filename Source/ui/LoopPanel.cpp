@@ -43,6 +43,222 @@ namespace
     }
 }
 
+// =============================================================================
+// Saved-loop browser. Slides in over the right-hand controls: every loop.wav
+// folder under <recordings>/loops is listed with its title, tempo, length and
+// notes. Double-click (or Load) puts the take back in the loop station, fitted
+// to the tempo that is running now, and starts playing.
+// =============================================================================
+class LoopPanel::SavedLoopsPanel final : public juce::Component,
+                                         private juce::ListBoxModel
+{
+public:
+    SavedLoopsPanel()
+    {
+        setOpaque (true);
+        setWantsKeyboardFocus (true);
+
+        titleLabel.setText (TR ("Saved loops", "已保存循环"), juce::dontSendNotification);
+        titleLabel.setFont (juce::FontOptions (19.0f, juce::Font::bold));
+        titleLabel.setColour (juce::Label::textColourId, juce::Colours::white);
+        addAndMakeVisible (titleLabel);
+
+        hintLabel.setText (TR ("Double-click a loop to load and play it. It is fitted to the current tempo.",
+                               "双击一个循环即可载入并播放，它会匹配当前速度。"),
+                           juce::dontSendNotification);
+        hintLabel.setFont (juce::FontOptions (11.5f));
+        hintLabel.setColour (juce::Label::textColourId, muted);
+        hintLabel.setJustificationType (juce::Justification::topLeft);
+        addAndMakeVisible (hintLabel);
+
+        list.setModel (this);
+        list.setRowHeight (44);
+        list.setMultipleSelectionEnabled (false);
+        list.setColour (juce::ListBox::backgroundColourId, juce::Colour (0xff101010));
+        list.setColour (juce::ListBox::outlineColourId, panelLine);
+        list.setOutlineThickness (1);
+        addAndMakeVisible (list);
+
+        refreshButton.setButtonText (TR ("Refresh", "刷新"));
+        refreshButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff303030));
+        noKeyboardFocus (refreshButton);
+        refreshButton.onClick = [this] { refresh(); };
+        addAndMakeVisible (refreshButton);
+
+        loadButton.setButtonText (TR ("Load", "载入"));
+        loadButton.setColour (juce::TextButton::buttonColourId, green);
+        loadButton.setEnabled (false);
+        noKeyboardFocus (loadButton);
+        loadButton.onClick = [this] { loadRow (list.getSelectedRow()); };
+        addAndMakeVisible (loadButton);
+
+        closeButton.setButtonText (TR ("Close", "关闭"));
+        closeButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff303030));
+        noKeyboardFocus (closeButton);
+        closeButton.onClick = [this] { if (onClose) onClose(); };
+        addAndMakeVisible (closeButton);
+
+        status.setFont (juce::FontOptions (11.0f));
+        status.setColour (juce::Label::textColourId, muted);
+        status.setJustificationType (juce::Justification::centredLeft);
+        addAndMakeVisible (status);
+
+        refresh();
+    }
+
+    std::function<void (const juce::File&)> onLoad;
+    std::function<void()> onClose;
+
+    void refresh()
+    {
+        loops = LoopStore::scanLoops();
+        list.deselectAllRows();
+        list.updateContent();
+        loadButton.setEnabled (false);
+
+        const int count = (int) loops.size();
+        status.setText (juce::String (count)
+                            + (count == 1 ? TR (" saved loop", " 个已保存循环")
+                                          : TR (" saved loops", " 个已保存循环")),
+                        juce::dontSendNotification);
+        repaint();
+    }
+
+    void focusList() { list.grabKeyboardFocus(); }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (bg);
+
+        auto r = getLocalBounds().toFloat().reduced (0.5f);
+        g.setColour (panel);
+        g.fillRoundedRectangle (r, 12.0f);
+        g.setColour (panelLine);
+        g.drawRoundedRectangle (r, 12.0f, 1.0f);
+    }
+
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        if (! loops.empty())
+            return;
+
+        auto r = list.getBounds().reduced (12);
+        g.setColour (muted);
+        g.setFont (juce::FontOptions (13.0f));
+        g.drawFittedText (TR ("No saved loops yet.\nRecord a take, then press Save loop — "
+                              "its notes and tempo will appear here.",
+                              "还没有保存的循环。\n录一段后按“保存循环”，备注和速度会显示在这里。"),
+                          r, juce::Justification::centred, 3);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced (14);
+
+        titleLabel.setBounds (area.removeFromTop (28));
+        hintLabel.setBounds (area.removeFromTop (38));
+        area.removeFromTop (8);
+
+        auto bottom = area.removeFromBottom (30);
+        closeButton.setBounds (bottom.removeFromRight (82).reduced (0, 1));
+        bottom.removeFromRight (8);
+        loadButton.setBounds (bottom.removeFromRight (82).reduced (0, 1));
+        bottom.removeFromRight (8);
+        refreshButton.setBounds (bottom.removeFromRight (90).reduced (0, 1));
+
+        area.removeFromBottom (8);
+        status.setBounds (area.removeFromBottom (18));
+        area.removeFromBottom (6);
+        list.setBounds (area);
+    }
+
+    bool keyPressed (const juce::KeyPress& key) override
+    {
+        if (key == juce::KeyPress::escapeKey)
+        {
+            if (onClose)
+                onClose();
+            return true;
+        }
+        return false;
+    }
+
+    int getNumRows() override { return (int) loops.size(); }
+
+    void paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected) override
+    {
+        if (! juce::isPositiveAndBelow (row, (int) loops.size()))
+            return;
+
+        const auto& info = loops[(size_t) row];
+
+        if (selected)
+            g.fillAll (juce::Colour (0xff2d5c4a));
+        else
+            g.fillAll ((row & 1) != 0 ? juce::Colour (0xff161616) : juce::Colour (0xff111111));
+
+        auto r = juce::Rectangle<int> (0, 0, width, height).reduced (9, 4);
+        auto top = r.removeFromTop (18);
+
+        auto meta = juce::String();
+        if (info.hasTempo())
+            meta << juce::String (juce::roundToInt (info.bpm)) << " BPM";
+        else
+            meta << TR ("tempo ?", "速度未知");
+
+        if (info.bars > 0.01)
+            meta << "  ·  " << juce::String (info.bars, 2) << TR (" bars", " 小节");
+        if (info.length > 0.0)
+            meta << "  ·  " << juce::String (info.length, 1) << " s";
+
+        g.setColour (juce::Colours::white);
+        g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+        g.drawText (info.title.isNotEmpty() ? info.title : info.folder.getFileName(),
+                    top.removeFromLeft (juce::jmax (80, top.getWidth() - 170)),
+                    juce::Justification::centredLeft, true);
+
+        g.setColour (muted);
+        g.setFont (juce::FontOptions (11.0f));
+        g.drawText (meta, top, juce::Justification::centredRight, true);
+
+        auto notes = info.notes.replaceCharacter ('\n', ' ').replaceCharacter ('\r', ' ').trim();
+        g.setColour (info.notes.isEmpty() ? juce::Colour (0xff5c5c5c) : muted.withAlpha (0.9f));
+        g.setFont (juce::FontOptions (11.5f));
+        g.drawFittedText (notes.isEmpty() ? TR ("No notes", "没有备注") : notes,
+                          r, juce::Justification::centredLeft, 1);
+    }
+
+    void selectedRowsChanged (int) override
+    {
+        loadButton.setEnabled (list.getSelectedRow() >= 0);
+    }
+
+    void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override
+    {
+        loadRow (row);
+    }
+
+    void returnKeyPressed (int row) override
+    {
+        loadRow (row);
+    }
+
+private:
+    void loadRow (int row)
+    {
+        if (! juce::isPositiveAndBelow (row, (int) loops.size()))
+            return;
+        if (onLoad)
+            onLoad (loops[(size_t) row].folder);
+    }
+
+    std::vector<LoopStore::LoopInfo> loops;
+
+    juce::Label titleLabel, hintLabel, status;
+    juce::ListBox list;
+    juce::TextButton refreshButton, loadButton, closeButton;
+};
+
 LoopPanel::LoopPanel (Looper& l, DrumMachine& d, juce::PropertiesFile& s)
     : looper (l), drums (d), settings (s)
 {
@@ -250,6 +466,23 @@ LoopPanel::LoopPanel (Looper& l, DrumMachine& d, juce::PropertiesFile& s)
     openFolderButton.onClick = [this] { openLoopsFolder(); grabKeyboardFocus(); };
     addAndMakeVisible (openFolderButton);
 
+    savedLoopsButton.setButtonText (TR ("Saved loops", "已保存循环"));
+    savedLoopsButton.setTooltip (TR ("Browse saved loops, read their notes, and load one at the current tempo.",
+                                     "浏览已保存的循环，查看备注，并按当前速度载入"));
+    noKeyboardFocus (savedLoopsButton);
+    savedLoopsButton.onClick = [this] { openSavedLoops(); };
+    addAndMakeVisible (savedLoopsButton);
+
+    savedLoopsPanel = std::make_unique<SavedLoopsPanel>();
+    savedLoopsPanel->onLoad = [this] (const juce::File& folder) { loadSavedLoop (folder); };
+    savedLoopsPanel->onClose = [this]
+    {
+        if (savedLoopsPanel != nullptr)
+            savedLoopsPanel->setVisible (false);
+        grabKeyboardFocus();
+    };
+    addChildComponent (savedLoopsPanel.get());
+
     styleLabel (savedLabel, 11.5f, muted);
     savedLabel.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (savedLabel);
@@ -368,6 +601,17 @@ void LoopPanel::stopLoop()     { looper.stop(); }
 
 bool LoopPanel::keyPressed (const juce::KeyPress& key)
 {
+    if (savedLoopsPanel != nullptr && savedLoopsPanel->isVisible())
+    {
+        if (key == juce::KeyPress::escapeKey)
+        {
+            savedLoopsPanel->setVisible (false);
+            grabKeyboardFocus();
+            return true;
+        }
+        return false;   // let the list handle its keys
+    }
+
     if (key == juce::KeyPress::spaceKey)
     {
         // Ignore Windows key auto-repeat: holding SPACE must not toggle
@@ -495,12 +739,17 @@ void LoopPanel::resized()
         c.removeFromTop (8);
 
         auto saveRow = c.removeFromTop (30);
-        saveButton.setBounds (saveRow.removeFromLeft (116));
-        saveRow.removeFromLeft (8);
+        saveButton.setBounds (saveRow.removeFromLeft (104));
+        saveRow.removeFromLeft (6);
+        savedLoopsButton.setBounds (saveRow.removeFromLeft (104));
+        saveRow.removeFromLeft (6);
         openFolderButton.setBounds (saveRow);
         c.removeFromTop (6);
         savedLabel.setBounds (c.removeFromTop (20));
     }
+
+    if (savedLoopsPanel != nullptr)
+        savedLoopsPanel->setBounds (controlsArea.expanded (8).getIntersection (getLocalBounds()));
 }
 
 // ---- paint ------------------------------------------------------------------
@@ -893,6 +1142,8 @@ void LoopPanel::refresh()
         lastLoopId = id;
         clearSelection();
         savedFolder = {};
+        savedTitle.clear();
+        loadedFromDisk = false;
         savedRevision = -1;
         lastSavedNotes.clear();
         savedLabel.setText (TR ("Not saved yet", "还没保存"), juce::dontSendNotification);
@@ -982,8 +1233,10 @@ void LoopPanel::refresh()
     if (savedFolder.isDirectory())
     {
         const bool unsaved = looper.getRevision() != savedRevision;
+        const auto label = savedTitle.isNotEmpty() ? savedTitle : savedFolder.getFileName();
         const auto text = unsaved ? TR ("Unsaved changes", "有未保存的修改")
-                                  : TR ("Saved · ", "已保存 · ") + savedFolder.getFileName();
+                                  : (loadedFromDisk ? TR ("Loaded · ", "已载入 · ")
+                                                    : TR ("Saved · ", "已保存 · ")) + label;
         if (savedLabel.getText() != text)
         {
             savedLabel.setText (text, juce::dontSendNotification);
@@ -1085,6 +1338,7 @@ void LoopPanel::updateControls()
     trimButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff303030));
     extendButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff303030));
     saveButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff2d5c4a));
+    savedLoopsButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff303030));
     openFolderButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff303030));
 }
 
@@ -1139,9 +1393,17 @@ void LoopPanel::saveLoop()
     if (! looper.hasLoop())
         return;
 
+    // The first line of the notes makes a useful title in the saved-loop list.
+    juce::String title = savedTitle;
+    if (title.isEmpty())
+        title = notesEditor.getText().trim().upToFirstOccurrenceOf ("\n", false, false).trim();
+    if (title.isEmpty())
+        title = TR ("Loop", "循环");
+    title = title.substring (0, 72);
+
     juce::String error;
     const auto folder = LoopStore::saveLoop (looper, savedFolder,
-                                             notesEditor.getText(), "Loop", error);
+                                             notesEditor.getText(), title, error);
 
     if (folder == juce::File())
     {
@@ -1152,14 +1414,120 @@ void LoopPanel::saveLoop()
 
     savedFolder = folder;
     savedRevision = looper.getRevision();
+    loadedFromDisk = false;
     lastSavedNotes = notesEditor.getText();
     notesDirty = false;
 
-    savedLabel.setText (TR ("Saved · ", "已保存 · ") + folder.getFileName(),
+    LoopStore::LoopInfo info;
+    savedTitle = LoopStore::readInfo (folder, info) ? info.title : title;
+
+    if (savedLoopsPanel != nullptr && savedLoopsPanel->isVisible())
+        savedLoopsPanel->refresh();
+
+    savedLabel.setText (TR ("Saved · ", "已保存 · ") + savedTitle,
                         juce::dontSendNotification);
     savedLabel.setColour (juce::Label::textColourId, accent);
     settings.setValue ("loopNotes", notesEditor.getText());
     updateControls();
+}
+
+void LoopPanel::openSavedLoops()
+{
+    if (savedLoopsPanel == nullptr)
+        return;
+
+    savedLoopsPanel->refresh();
+    savedLoopsPanel->setBounds (controlsArea.expanded (8).getIntersection (getLocalBounds()));
+    savedLoopsPanel->setVisible (true);
+    savedLoopsPanel->toFront (true);
+    savedLoopsPanel->focusList();
+}
+
+void LoopPanel::loadSavedLoop (const juce::File& folder)
+{
+    const auto st = looper.getState();
+    if (st == Looper::State::recording || st == Looper::State::armingRecord
+        || st == Looper::State::overdubbing || st == Looper::State::armedOverdub
+        || st == Looper::State::extending || st == Looper::State::armingPlay)
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
+                                                TR ("Loop station is busy", "循环站正忙"),
+                                                TR ("Stop the current take before loading a saved loop.",
+                                                    "请先停止当前的录音或叠加，再载入已保存的循环。"));
+        return;
+    }
+
+    LoopStore::LoopInfo info;
+    if (! LoopStore::readInfo (folder, info))
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                TR ("Cannot load loop", "没法载入循环"),
+                                                TR ("The loop folder has no readable loop.wav.",
+                                                    "这个循环文件夹里没有可读取的 loop.wav。"));
+        return;
+    }
+
+    juce::AudioBuffer<float> audio;
+    double sourceRate = 0.0;
+    juce::String error;
+    if (! LoopStore::loadAudio (info, audio, sourceRate, error))
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                TR ("Cannot load loop", "没法载入循环"), error);
+        return;
+    }
+
+    const double currentBpm = juce::jmax (30.0, (double) drums.getBpm());
+    const int bpb = info.beatsPerBar > 0 ? info.beatsPerBar : drums.getGridBeatsPerBar();
+
+    // A saved take keeps its bar count and is stretched to the tempo that is
+    // running now, so it locks to the drum machine and starts playing.
+    juce::AudioBuffer<float> fitted;
+    double fittedRate = sourceRate;
+    if (! LoopStore::stretchToTempo (audio, sourceRate,
+                                     info.hasTempo() ? info.bpm : currentBpm,
+                                     currentBpm, fitted, fittedRate, error))
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                TR ("Cannot match the tempo", "没法匹配速度"), error);
+        return;
+    }
+
+    // Load it stopped, then use the normal play action: with the drums running
+    // that waits for the next drum bar, so the take starts on the grid.
+    if (! looper.loadLoop (fitted, fittedRate, currentBpm, bpb, false))
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                TR ("Cannot load loop", "没法载入循环"),
+                                                TR ("The take is too long for the 2:00 loop buffer.",
+                                                    "这段循环超过 2:00 的循环缓冲区。"));
+        return;
+    }
+    looper.toggle();
+
+    savedFolder = folder;
+    savedTitle = info.title;
+    loadedFromDisk = true;
+    savedRevision = looper.getRevision();
+    lastLoopId = looper.getLoopId();
+    lastSavedNotes = info.notes;
+    notesDirty = false;
+
+    updatingNotes = true;
+    notesEditor.setText (info.notes, false);
+    updatingNotes = false;
+    settings.setValue ("loopNotes", info.notes);
+
+    savedLabel.setText (TR ("Loaded · ", "已载入 · ") + savedTitle,
+                        juce::dontSendNotification);
+    savedLabel.setColour (juce::Label::textColourId, accent);
+    clearSelection();
+    if (savedLoopsPanel != nullptr)
+        savedLoopsPanel->setVisible (false);
+
+    updateControls();
+    refresh();
+    grabKeyboardFocus();
 }
 
 void LoopPanel::updateNotesFile()

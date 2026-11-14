@@ -33,7 +33,9 @@ interface, ASCII paths, a rewritten drum engine, and dual-stem recording.
   produces a tight loop; with the drums playing the loop locks to the drum bar
   grid. The timeline shows the loop take with bar lines and a playhead, plus a
   LIVE lane of what you are playing now. Auto or fixed 1/2/4/8-bar takes,
-  30-second maximum.
+  2-minute maximum. **Saved loops** opens a browser of every saved take with
+  its notes, BPM, bar count and length; double-click one to load and play it,
+  time-stretched to the current tempo and started on the drum bar.
 - **Practice**: Guitar Pro 3–8 import, scrolling tab highway, demo/backing
   playback, judging (Perfect/Good/wrong/miss), wait mode, latency calibration,
   speed trainer, practice log.

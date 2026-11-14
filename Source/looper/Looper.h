@@ -76,6 +76,12 @@ public:
     bool canEditNow() const noexcept;           // playing or stopped, loop exists
     // Copy the current loop for saving. Returns false while recording.
     bool copyLoopTo (juce::AudioBuffer<float>& dest, double& sampleRateOut);
+    // Replace the loop with an already recorded take (a saved loop from disk).
+    // The take is resampled to the engine rate, and its tempo is published so
+    // the bar grid and the drum machine can follow it. Refuses while a take is
+    // being recorded / overdubbed / extended.
+    bool loadLoop (const juce::AudioBuffer<float>& source, double sourceSampleRate,
+                   double bpm, int beatsPerBar, bool startPlaying);
     // Called from the UI timer; rebuilds the published waveform after an edit.
     void updateWaveformIfDirty();
     void seek (double seconds) noexcept         { seekRequest.store (seconds); }

@@ -89,6 +89,16 @@ assets/nam/
 
 Rebuild the library at any time with `tools/import_assets.ps1` (idempotent).
 
+Extra captures can be added without rebuilding the bundled library:
+
+```
+tools\import_custom_nam.ps1 -Source <folder of .nam files>
+```
+
+They go to `assets/nam/custom/<pack>/` and are appended to `index.json` with
+`collection = "custom"` (de-duplicated by SHA-256). This is the recommended way
+to keep TONE3000 downloads separate from the bundled GPL-3.0 collections.
+
 `assets/` is **git-ignored** and must never be pushed to a remote. The tones stay
 local; only code, build scripts, and the import tool are versioned.
 

@@ -376,6 +376,112 @@ bool Looper::copyLoopTo (juce::AudioBuffer<float>& dest, double& sampleRateOut)
     return true;
 }
 
+bool Looper::loadLoop (const juce::AudioBuffer<float>& source, double sourceSampleRate,
+                       double bpm, int beatsPerBar, bool startPlaying)
+{
+    if (source.getNumSamples() <= 0)
+        return false;
+
+    if (! (sourceSampleRate > 0.0))
+        sourceSampleRate = sampleRate;
+
+    const juce::ScopedLock sl (bufferLock);
+
+    if (capacity <= 0)
+        return false;
+
+    // Replacing a take while it is being recorded or extended would fight the
+    // audio thread's write position. The UI stops those first.
+    if (current != State::empty && current != State::playing && current != State::stopped)
+        return false;
+
+    const int64_t sourceSamples = (int64_t) source.getNumSamples();
+    const double ratio = sourceSampleRate / juce::jmax (1.0, sampleRate);
+    int64_t wanted = (int64_t) std::llround ((double) sourceSamples / juce::jmax (1.0e-9, ratio));
+    wanted = juce::jlimit<int64_t> (1, (int64_t) capacity, wanted);
+
+    const int srcChannels = source.getNumChannels();
+    if (srcChannels <= 0)
+        return false;
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        auto* dst = loopBuffer.getWritePointer (ch);
+        const auto* src = source.getReadPointer (juce::jmin (ch, srcChannels - 1));
+
+        if (std::abs (sampleRate - sourceSampleRate) < 0.01)
+        {
+            const int copy = (int) juce::jmin<int64_t> (sourceSamples, wanted);
+            juce::FloatVectorOperations::copy (dst, src, copy);
+            if (wanted > copy)
+                juce::FloatVectorOperations::clear (dst + copy, (int) (wanted - copy));
+        }
+        else
+        {
+            juce::LagrangeInterpolator interpolator;
+            interpolator.process (sourceSampleRate / juce::jmax (1.0, sampleRate),
+                                  src, dst, (int) wanted, (int) sourceSamples, 0);
+        }
+
+        // Short fades keep the seam click-free without changing the take.
+        const int64_t fade = juce::jmin<int64_t> (wanted / 4, (int64_t) (0.003 * sampleRate));
+        if (fade > 1)
+        {
+            for (int64_t i = 0; i < fade; ++i)
+            {
+                const float g = (float) i / (float) fade;
+                dst[i] *= g;
+                dst[wanted - 1 - i] *= g;
+            }
+        }
+    }
+
+    loopLen = wanted;
+    recordFrames = 0;
+    playPos = 0;
+    closeTarget = 0;
+    fixedTarget = 0;
+    closePending = false;
+    clearPending = false;
+    armSamples = 0;
+    while (toggleRequested.exchange (false)) {}
+    while (stopRequested.exchange (false)) {}
+    while (clearRequested.exchange (false)) {}
+    seekRequest.store (-1.0);
+    extOldLen = extEnd = extRecorded = 0;
+    extWasPlaying = false;
+    extendStartSeconds.store (0.0);
+    extendEndSeconds.store (0.0);
+    pendingExtendFrames.store (0);
+    countInRemaining.store (0);
+    countInTotal.store (0);
+
+    const double loadedBpm = bpm > 1.0 ? juce::jlimit (30.0, 300.0, bpm) : recordBpm;
+    recordBpm = loadedBpm;
+    recordBeatsPerBar = juce::jlimit (1, 12, beatsPerBar);
+    loopBpm.store (loadedBpm);
+    loopBeatsPerBar.store (recordBeatsPerBar);
+
+    layers.store (1);
+    fadeGain = 0.0f;
+    undoBuffer.setSize (0, 0);
+    undoLen = 0;
+    undoAvailable.store (false);
+
+    publishLengths();
+    rebuildWaveformLocked();
+    revision.fetch_add (1);
+    loopId.fetch_add (1);
+    waveformDirty.store (false);
+    recordedSeconds.store (0.0);
+    position.store (0.0);
+
+    setCurrent (startPlaying ? State::playing : State::stopped);
+    state.store (current);
+    loopFrames.store (loopLen);
+    return true;
+}
+
 void Looper::discardRecording()
 {
     loopLen = 0;

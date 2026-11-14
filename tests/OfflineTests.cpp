@@ -788,6 +788,28 @@ int runOfflineTests (int argc, char* argv[])
             if (auto os = f.createOutputStream())
                 png.writeImageToStream (img, *os);
         }
+
+        // Saved-loop browser: record a take, save it with notes, open the drawer.
+        lp.setCountInBeats (0);
+        lp.clear();
+        runAudio (std::vector<float> ((size_t) (0.3 * sr), 0.0f));
+        lp.setFixedLengthBars (2);
+        lp.toggle();
+        runAudio (phrase (4.8));   // 2 bars at 100 BPM
+
+        auto recordingRoot = outDir.getChildFile ("loop-recordings");
+        recordingRoot.createDirectory();
+        AppPaths::setRecordingsRoot (recordingRoot);
+
+        juce::String saveError;
+        LoopStore::saveLoop (lp, {}, "A minor pentatonic idea\nSlow blues feel - try 8th notes",
+                             "Gravity idea", saveError);
+
+        panel.refresh();
+        panel.openSavedLoops();
+        snap ("loop_saved_list.png");
+
+        AppPaths::clearRecordingsRoot();
         return 0;
     }
     if (argc > 2 && juce::String (argv[1]) == "--gervana-ui")
@@ -2428,8 +2450,11 @@ int runOfflineTests (int argc, char* argv[])
             std::vector<float> l, r;
             process (e, tone (2.2, 220.0, 0.2f), l, r);
 
-            auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                           .getChildFile ("tone_tab_loopstore").getNonexistentSibling();
+            auto root = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                            .getChildFile ("tone_tab_loopstore").getNonexistentSibling();
+            root.createDirectory();
+            AppPaths::setRecordingsRoot (root);
+            auto dir = root.getChildFile ("loops").getChildFile ("Test take");
             dir.createDirectory();
 
             juce::String err;
@@ -2443,11 +2468,15 @@ int runOfflineTests (int argc, char* argv[])
             check (v["notes"].toString() == "first note" && v["kind"].toString() == "loop"
                        && std::abs ((double) v["bars"] - 1.0) < 0.02,
                    T ("loop.json 带备注、类型和小节数"));
+            check (! v["levelDb"].isVoid() && ! v["beatsPerBar"].isVoid()
+                       && ! v["length"].isVoid() && ! v["quantise"].isVoid(),
+                   T ("loop.json 带音量、拍号、长度和网格信息"));
 
             check (LoopStore::updateNotes (saved, "second note", err),
                    T ("更新循环备注"));
             v = juce::JSON::parse (jsonFile);
             check (v["notes"].toString() == "second note", T ("备注已经更新"));
+            check (! v["notesUpdated"].isVoid(), T ("loop.json 带备注更新时间"));
 
             juce::AudioFormatManager fm;
             fm.registerBasicFormats();
@@ -2457,7 +2486,49 @@ int runOfflineTests (int argc, char* argv[])
                            && std::abs ((double) reader->lengthInSamples - 2.0 * sr) < 1.0,
                        T ("保存的 WAV 是 2 秒立体声"));
 
-            dir.deleteRecursively();
+            // The saved-loop browser finds it and reads the notes / tempo.
+            const auto scanned = LoopStore::scanLoops();
+            check (scanned.size() == 1 && scanned[0].title == "Test loop"
+                       && scanned[0].notes == "second note"
+                       && std::abs (scanned[0].bpm - 120.0) < 0.01,
+                   T ("已保存循环列表带标题、备注和 BPM"));
+
+            // Loading it at a different tempo keeps the bar length: 1 bar at
+            // 140 BPM is shorter than the 2.000 s recorded at 120 BPM.
+            LoopStore::LoopInfo info;
+            juce::AudioBuffer<float> decoded, fitted;
+            double decodedRate = 0.0, fittedRate = 0.0;
+            check (LoopStore::readInfo (saved, info)
+                       && LoopStore::loadAudio (info, decoded, decodedRate, err),
+                   T ("读取已保存循环的音频"));
+            check (LoopStore::stretchToTempo (decoded, decodedRate, info.bpm, 140.0,
+                                              fitted, fittedRate, err),
+                   T ("按当前速度拉伸循环") + (err.isEmpty() ? juce::String() : "  " + err));
+
+            const double expected = (double) decoded.getNumSamples() / decodedRate * 120.0 / 140.0;
+            check (std::abs ((double) fitted.getNumSamples() / fittedRate - expected) < 0.03,
+                   T ("拉伸后 1 小节长度 ") + juce::String (expected, 3) + T (" 秒"));
+
+            float peak = 0.0f;
+            for (int ch = 0; ch < fitted.getNumChannels(); ++ch)
+                for (int i = 0; i < fitted.getNumSamples(); ++i)
+                    peak = juce::jmax (peak, std::abs (fitted.getSample (ch, i)));
+            check (peak > 0.01f, T ("拉伸后仍有声音，峰值 ") + juce::String (peak, 3));
+
+            AudioEngine loadedEngine;
+            loadedEngine.prepareForOffline (sr, block);
+            loadedEngine.setOutputGainDb (0.0f);
+            auto& loadedLoop = loadedEngine.getLooper();
+            loadedEngine.getDrums().setBpm (140.0f);
+            check (loadedLoop.loadLoop (fitted, fittedRate, 140.0, info.beatsPerBar, true),
+                   T ("双击载入循环站"));
+            check (loadedLoop.getState() == Looper::State::playing
+                       && std::abs (loadedLoop.getLengthSeconds() - expected) < 0.05
+                       && std::abs (loadedLoop.getLoopBpm() - 140.0) < 0.01,
+                   T ("载入后按当前 140 BPM 播放"));
+
+            AppPaths::clearRecordingsRoot();
+            root.deleteRecursively();
         }
     }
 

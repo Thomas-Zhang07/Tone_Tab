@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<Chain displayName="Classic Rock - JCM800 Lead (Updated)">
+  <Slot kind="builtin" id="gate">
+    <Params threshold="-58" release="70" attack="1"/>
+  </Slot>
+  <Slot kind="nam" path="@app/assets/nam/custom/TS808_Overdrive/TS-808 – Classic Boost.nam">
+    <Params output="-4" bass="0" mid="0.5" treble="0.5"/>
+  </Slot>
+  <Slot kind="nam" path="@app/assets/nam/tone3000_a2/11_marshall-jcm800.nam">
+    <Params output="0"/>
+  </Slot>
+  <Slot kind="builtin" id="delay">
+    <Params time="360" feedback="0.28" mix="0.16" tone="4000" type="1" mod="0.1"/>
+  </Slot>
+  <Slot kind="builtin" id="reverb">
+    <Params type="1" size="0.45" damping="0.55" predelay="20" mix="0.16"/>
+  </Slot>
+</Chain>

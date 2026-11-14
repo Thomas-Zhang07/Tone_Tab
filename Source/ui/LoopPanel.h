@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <memory>
 #include "looper/Looper.h"
 #include "drums/DrumMachine.h"
 
@@ -33,7 +34,12 @@ public:
     void stopLoop();
     void refresh();
 
+    // Opens the saved-loop browser over the right-hand controls.
+    void openSavedLoops();
+
 private:
+    class SavedLoopsPanel;
+
     void timerCallback() override;
     void updateControls();
     void saveSettings();
@@ -51,6 +57,7 @@ private:
     void extendLoop();
     void undoEdit();
     void saveLoop();
+    void loadSavedLoop (const juce::File& folder);
     void updateNotesFile();
     void openLoopsFolder();
     void clearSelection();
@@ -71,10 +78,11 @@ private:
                 countInLabel, levelLabel, continueLabel, notesLabel,
                 savedLabel, selectionLabel;
     juce::TextButton mainButton, stopButton, clearButton, undoButton, trimButton,
-                     extendButton, saveButton, openFolderButton;
+                     extendButton, saveButton, savedLoopsButton, openFolderButton;
     juce::ComboBox quantiseBox, lengthBox;
     juce::Slider tempoSlider, levelSlider, countInSlider, extendBarsSlider;
     juce::TextEditor notesEditor;
+    std::unique_ptr<SavedLoopsPanel> savedLoopsPanel;
 
     juce::Rectangle<int> headerArea, transportArea, timelineArea, editArea, hintArea,
                          controlsArea, notesArea;
@@ -89,6 +97,8 @@ private:
     int mouseDownX = 0;
 
     juce::File savedFolder;
+    juce::String savedTitle;
+    bool loadedFromDisk = false;
     juce::String lastSavedNotes;
     int64_t savedRevision = -1;
     bool notesDirty = false;
