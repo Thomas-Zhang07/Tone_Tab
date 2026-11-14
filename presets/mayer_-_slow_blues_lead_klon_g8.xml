@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<Chain displayName="Mayer - Slow Blues Lead (Klon G8 · More Gain)">
+  <Slot kind="builtin" id="denoise">
+    <Params threshold="-62" amount="25" release="140" hum="1"/>
+  </Slot>
+  <Slot kind="nam" path="@app/assets/nam/custom/The_Klone/6_KlonClone_G8_T5_O5.nam">
+    <Params output="-5" bass="0" mid="0.5" treble="0"/>
+  </Slot>
+  <Slot kind="nam" path="@app/assets/nam/custom/DUMBLE/JOHN MAYER CLEAN-001.nam">
+    <Params output="3" bass="0.5" mid="0.5" treble="0"/>
+  </Slot>
+  <Slot kind="builtin" id="gate">
+    <Params threshold="-50" release="140" attack="1" ratio="10"/>
+  </Slot>
+  <Slot kind="builtin" id="delay">
+    <Params time="400" feedback="0.24" mix="0.14" tone="3800" type="1" mod="0.1"/>
+  </Slot>
+  <Slot kind="builtin" id="reverb">
+    <Params type="2" size="0.55" damping="0.5" predelay="28" mix="0.18"/>
+  </Slot>
+</Chain>
